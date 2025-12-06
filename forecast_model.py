@@ -236,7 +236,7 @@ class CallVolumeForecaster:
         n_test = len(df_test)
         
         # For exogenous forecasting, we need axiom scores
-        future_exog = df_test if 'axiom_ray_score' in df_test.columns else None
+        future_exog = df_test if isinstance(df_test, pd.DataFrame) and 'axiom_ray_score' in df_test.columns else None
         forecast = self.forecast_future(periods=n_test, future_exog=future_exog)
         
         actual_values = df_test['y'].values
@@ -300,7 +300,7 @@ def compare_forecasts(df_train, df_test, forecast_periods):
     }
     
     # Model WITH Axiom Ray (enhanced)
-    if 'axiom_ray_score' in df_train.columns:
+    if isinstance(df_train, pd.DataFrame) and 'axiom_ray_score' in df_train.columns:
         model_enhanced = CallVolumeForecaster(use_exogenous=True)
         model_enhanced.fit(df_train)
         metrics_enhanced, eval_enhanced = model_enhanced.evaluate(df_test)

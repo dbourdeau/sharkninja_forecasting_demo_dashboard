@@ -84,12 +84,12 @@ def load_data():
 
 
 @st.cache_resource
-def train_model(df_train):
+def train_model(df_train, use_exogenous=True):
     """
     Train and cache the SARIMAX model.
     Uses Streamlit cache to avoid retraining when parameters don't change.
     """
-    forecaster = CallVolumeForecaster(weekly_seasonality=True, yearly_seasonality=True)
+    forecaster = CallVolumeForecaster(use_exogenous=use_exogenous)
     forecaster.fit(df_train)
     return forecaster
 
