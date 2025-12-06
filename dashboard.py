@@ -959,6 +959,7 @@ RECOMMENDATIONS:
     # Business Impact Tab (renumbered to tab4)
     with tab4:
         st.header("Business Impact & Staffing Analysis")
+        st.markdown("**Comprehensive financial and operational impact analysis of the forecast**")
         
         # Fixed business parameters (realistic industry defaults)
         hourly_rate = 25  # $25/hour
@@ -966,115 +967,311 @@ RECOMMENDATIONS:
         avg_handle_time = 4.5  # 4.5 minutes
         service_level = 0.80  # 80% SLA
         
-        # Calculate staffing needs
+        # Calculate all metrics
         staffing_df = calculate_staffing_needs(future_forecast, avg_handle_time, service_level)
         costs_df = calculate_costs(staffing_df, hourly_rate, overhead_rate)
         roi_metrics = calculate_roi(future_forecast, train_df, avg_handle_time, hourly_rate, overhead_rate)
+        service_quality = calculate_service_quality_metrics(future_forecast, staffing_df, avg_handle_time, service_level)
+        budget_impact = calculate_budget_impact(future_forecast, costs_df, train_df)
         
-        # Key Business Metrics
+        # Key Business Metrics - Executive Summary
+        st.subheader("Executive Summary")
+        
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             total_cost = costs_df['weekly_cost'].sum()
-            st.metric("Total Forecast Cost", f"${total_cost:,.0f}", 
-                     delta=f"${costs_df['weekly_cost'].mean():,.0f}/week avg")
+            annual_cost = roi_metrics['annual_cost_forecast']
+            st.metric(
+                "Total Forecast Cost", 
+                f"${total_cost:,.0f}",
+                delta=f"${annual_cost:,.0f} annualized",
+                delta_color="normal"
+            )
         with col2:
-            avg_agents = staffing_df['agents_needed'].mean()
-            st.metric("Avg Agents Needed", f"{avg_agents:.1f}", 
-                     delta=f"{staffing_df['agents_needed'].max():.0f} peak")
+            savings = roi_metrics['total_savings']
+            savings_pct = roi_metrics['savings_percentage']
+            st.metric(
+                "Cost Savings vs Reactive", 
+                f"${savings:,.0f}",
+                delta=f"{savings_pct:.1f}% improvement",
+                delta_color="normal"
+            )
         with col3:
-            st.metric("Cost Savings", f"${roi_metrics['total_savings']:,.0f}",
-                     delta=f"{roi_metrics['savings_percentage']:.1f}%")
+            avg_agents = staffing_df['agents_needed'].mean()
+            agents_saved = roi_metrics['agents_saved']
+            st.metric(
+                "Avg Agents Needed", 
+                f"{avg_agents:.1f}",
+                delta=f"{agents_saved:.1f} agents saved vs reactive",
+                delta_color="inverse"
+            )
         with col4:
-            st.metric("Agents Saved", f"{roi_metrics['agents_saved']:.1f}",
-                     delta="vs reactive staffing")
+            avg_cost_per_call = roi_metrics['avg_cost_per_call_forecast']
+            avg_wait = service_quality['estimated_avg_wait_sec'].mean()
+            st.metric(
+                "Cost Efficiency", 
+                f"${avg_cost_per_call:.2f}/call",
+                delta=f"{avg_wait:.0f}s avg wait time",
+                delta_color="off"
+            )
         
         st.markdown("---")
         
-        # Staffing Forecast Chart
-        fig_staffing = make_subplots(specs=[[{"secondary_y": True}]])
+        # ROI Comparison Section
+        st.subheader("ROI Analysis: Forecast-Based vs Alternative Strategies")
         
-        fig_staffing.add_trace(
+        roi_col1, roi_col2, roi_col3 = st.columns(3)
+        
+        with roi_col1:
+            st.markdown("**📊 Forecast-Based Staffing** *(Recommended)*")
+            st.markdown(f"""
+            - Total Cost: **${roi_metrics['total_forecast_cost']:,.0f}**
+            - Avg Weekly: **${roi_metrics['avg_weekly_cost_forecast']:,.0f}**
+            - Avg Agents: **{roi_metrics['avg_agents_forecast']:.1f}**
+            - Cost/Call: **${roi_metrics['avg_cost_per_call_forecast']:.2f}**
+            - **Annual Cost**: ${roi_metrics['annual_cost_forecast']:,.0f}
+            """)
+        
+        with roi_col2:
+            st.markdown("**⚠️ Reactive Staffing** *(Conservative - Always Staff for Peak)*")
+            st.markdown(f"""
+            - Total Cost: **${roi_metrics['total_reactive_cost']:,.0f}**
+            - Avg Weekly: **${roi_metrics['avg_weekly_cost_reactive']:,.0f}**
+            - Avg Agents: **{roi_metrics['avg_agents_reactive']:.1f}**
+            - Cost/Call: **${roi_metrics['avg_cost_per_call_reactive']:.2f}**
+            - **Waste**: ${roi_metrics['total_savings']:,.0f} over forecast period
+            """)
+        
+        with roi_col3:
+            st.markdown("**⚡ Average Staffing** *(Risky - Staff for Average)*")
+            st.markdown(f"""
+            - Total Cost: **${roi_metrics['total_avg_cost']:,.0f}**
+            - Avg Weekly: **${roi_metrics['avg_weekly_cost_avg']:,.0f}**
+            - Avg Agents: **{roi_metrics['avg_agents_avg']:.1f}**
+            - Cost/Call: **${roi_metrics['avg_cost_per_call_avg']:.2f}**
+            - **Trade-off**: ${abs(roi_metrics['additional_vs_avg']):,.0f} for better service
+            """)
+        
+        # Savings highlight
+        if roi_metrics['total_savings'] > 0:
+            st.success(f"""
+            **💰 Forecast-Based Staffing Saves ${roi_metrics['total_savings']:,.0f}** 
+            (${roi_metrics['annualized_savings']:,.0f} annualized) 
+            vs reactive staffing while maintaining service quality.
+            """)
+        
+        # Historical comparison
+        if roi_metrics['avg_historical_weekly_cost'] > 0:
+            hist_change = roi_metrics['forecast_vs_historical']
+            hist_change_pct = roi_metrics['forecast_vs_historical_pct']
+            if abs(hist_change_pct) > 1:
+                direction = "increase" if hist_change > 0 else "decrease"
+                st.info(f"""
+                **📈 Forecast vs Recent History**: 
+                Forecasted costs are {abs(hist_change_pct):.1f}% {direction} 
+                (${abs(hist_change):,.0f}/week) compared to recent historical average.
+                """)
+        
+        st.markdown("---")
+        
+        # Budget Planning Section
+        st.subheader("Budget Planning")
+        
+        budget_col1, budget_col2 = st.columns(2)
+        
+        with budget_col1:
+            st.markdown("**Monthly Budget Breakdown**")
+            if budget_impact['monthly_costs']:
+                monthly_df = pd.DataFrame([
+                    {'Month': str(k), 'Budget': f"${v:,.0f}"} 
+                    for k, v in budget_impact['monthly_costs'].items()
+                ])
+                st.dataframe(monthly_df, use_container_width=True, hide_index=True)
+        
+        with budget_col2:
+            st.markdown("**Cost Range & Trends**")
+            st.markdown(f"""
+            - **Peak Week**: ${budget_impact['peak_weekly_cost']:,.0f}
+            - **Low Week**: ${budget_impact['min_weekly_cost']:,.0f}
+            - **Range**: ${budget_impact['cost_range']:,.0f}
+            - **Trend**: {budget_impact['cost_trend']}
+            """)
+        
+        st.markdown("---")
+        
+        # Service Quality Section
+        st.subheader("Service Quality Projections")
+        
+        quality_col1, quality_col2, quality_col3 = st.columns(3)
+        
+        with quality_col1:
+            avg_service_level = service_quality['estimated_service_level'].mean() * 100
+            risk_weeks = service_quality['service_level_risk'].sum()
+            st.metric(
+                "Expected Service Level",
+                f"{avg_service_level:.1f}%",
+                delta=f"{risk_weeks} weeks below target" if risk_weeks > 0 else "All weeks meet target",
+                delta_color="inverse" if risk_weeks > 0 else "normal"
+            )
+        
+        with quality_col2:
+            avg_wait = service_quality['estimated_avg_wait_sec'].mean()
+            max_wait = service_quality['estimated_avg_wait_sec'].max()
+            st.metric(
+                "Avg Wait Time",
+                f"{avg_wait:.0f} seconds",
+                delta=f"{max_wait:.0f}s peak"
+            )
+        
+        with quality_col3:
+            avg_occupancy = service_quality['expected_occupancy'].mean() * 100
+            st.metric(
+                "Agent Occupancy",
+                f"{avg_occupancy:.1f}%",
+                delta="Optimal range: 75-85%"
+            )
+        
+        st.markdown("---")
+        
+        # Comprehensive Visualizations
+        st.subheader("Forecast Visualizations")
+        
+        # Multi-panel visualization
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                "Call Volume & Staffing Requirements",
+                "Weekly Costs Over Time",
+                "Service Quality Metrics",
+                "Cost Efficiency (Cost per Call)"
+            ),
+            specs=[[{"secondary_y": True}, {"secondary_y": False}],
+                   [{"secondary_y": True}, {"secondary_y": False}]],
+            vertical_spacing=0.12
+        )
+        
+        # Panel 1: Volume & Staffing
+        fig.add_trace(
             go.Scatter(x=staffing_df['ds'], y=staffing_df['yhat'], 
-                      name='Call Volume', line=dict(color='#1f77b4')),
-            secondary_y=False
+                      name='Call Volume', line=dict(color='#1f77b4', width=2)),
+            row=1, col=1, secondary_y=False
         )
-        
-        fig_staffing.add_trace(
+        fig.add_trace(
             go.Scatter(x=staffing_df['ds'], y=staffing_df['agents_needed'],
-                      name='Agents Needed', line=dict(color='#ff7f0e', width=2),
-                      fill='tonexty'),
-            secondary_y=True
+                      name='Agents Needed', line=dict(color='#ff7f0e', width=2)),
+            row=1, col=1, secondary_y=True
         )
         
-        fig_staffing.update_xaxes(title_text="Date")
-        fig_staffing.update_yaxes(title_text="Call Volume", secondary_y=False)
-        fig_staffing.update_yaxes(title_text="Agents Needed", secondary_y=True)
-        fig_staffing.update_layout(
-            title="Call Volume vs Staffing Requirements",
-            height=500,
-            template='plotly_white'
+        # Panel 2: Costs
+        fig.add_trace(
+            go.Scatter(x=costs_df['ds'], y=costs_df['weekly_cost'],
+                      name='Weekly Cost', line=dict(color='#2ca02c', width=2),
+                      fill='tozeroy', fillcolor='rgba(44, 160, 44, 0.1)'),
+            row=1, col=2
         )
-        st.plotly_chart(fig_staffing, use_container_width=True)
         
-        # Cost Analysis
+        # Panel 3: Service Quality
+        fig.add_trace(
+            go.Scatter(x=service_quality['ds'], 
+                      y=service_quality['estimated_service_level'] * 100,
+                      name='Service Level %', line=dict(color='#9467bd', width=2)),
+            row=2, col=1, secondary_y=False
+        )
+        fig.add_trace(
+            go.Scatter(x=service_quality['ds'],
+                      y=service_quality['estimated_avg_wait_sec'],
+                      name='Avg Wait (sec)', line=dict(color='#d62728', width=2)),
+            row=2, col=1, secondary_y=True
+        )
+        
+        # Panel 4: Cost per Call
+        fig.add_trace(
+            go.Scatter(x=costs_df['ds'], y=costs_df['cost_per_call'],
+                      name='Cost per Call', line=dict(color='#8c564b', width=2)),
+            row=2, col=2
+        )
+        
+        # Update axes
+        fig.update_xaxes(title_text="Date", row=2, col=1)
+        fig.update_xaxes(title_text="Date", row=2, col=2)
+        fig.update_yaxes(title_text="Call Volume", row=1, col=1, secondary_y=False)
+        fig.update_yaxes(title_text="Agents", row=1, col=1, secondary_y=True)
+        fig.update_yaxes(title_text="Weekly Cost ($)", row=1, col=2)
+        fig.update_yaxes(title_text="Service Level (%)", row=2, col=1, secondary_y=False)
+        fig.update_yaxes(title_text="Wait Time (sec)", row=2, col=1, secondary_y=True)
+        fig.update_yaxes(title_text="Cost per Call ($)", row=2, col=2)
+        
+        fig.update_layout(height=800, showlegend=True, template='plotly_white')
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # Detailed Tables
         col1, col2 = st.columns(2)
         
         with col1:
             st.subheader("Staffing Requirements")
-            staffing_display = staffing_df[['ds', 'yhat', 'agents_needed', 'fte_needed']].copy()
+            staffing_display = staffing_df[['ds', 'yhat', 'agents_needed', 'fte_needed', 'occupancy_pct']].copy()
             staffing_display['ds'] = staffing_display['ds'].dt.strftime('%Y-%m-%d')
-            staffing_display.columns = ['Date', 'Calls', 'Agents', 'FTE']
+            staffing_display.columns = ['Date', 'Calls', 'Agents', 'FTE', 'Occupancy %']
             st.dataframe(staffing_display, use_container_width=True, height=400)
         
         with col2:
             st.subheader("Cost Breakdown")
-            costs_display = costs_df[['ds', 'weekly_cost', 'monthly_cost']].copy()
+            costs_display = costs_df[['ds', 'weekly_cost', 'monthly_cost', 'cost_per_call']].copy()
             costs_display['ds'] = costs_display['ds'].dt.strftime('%Y-%m-%d')
-            costs_display.columns = ['Date', 'Weekly Cost ($)', 'Monthly Cost ($)']
+            costs_display.columns = ['Date', 'Weekly Cost ($)', 'Monthly Cost ($)', 'Cost/Call ($)']
             costs_display['Weekly Cost ($)'] = costs_display['Weekly Cost ($)'].apply(lambda x: f"${x:,.0f}")
             costs_display['Monthly Cost ($)'] = costs_display['Monthly Cost ($)'].apply(lambda x: f"${x:,.0f}")
+            costs_display['Cost/Call ($)'] = costs_display['Cost/Call ($)'].apply(lambda x: f"${x:.2f}")
             st.dataframe(costs_display, use_container_width=True, height=400)
         
-        # ROI Analysis
+        # Risk Periods with Enhanced Analysis
         st.markdown("---")
-        st.subheader("ROI Analysis")
+        st.subheader("Risk Analysis & Recommendations")
         
-        roi_col1, roi_col2 = st.columns(2)
-        with roi_col1:
-            avg_weekly_forecast = roi_metrics['total_forecast_cost'] / roi_metrics['forecast_period_weeks'] if roi_metrics['forecast_period_weeks'] > 0 else 0
-            st.markdown(f"""
-            **Forecast-Based Staffing:**
-            - Total Cost: ${roi_metrics['total_forecast_cost']:,.0f}
-            - Avg Agents: {roi_metrics['avg_agents_forecast']:.1f}
-            - Avg Weekly Cost: ${avg_weekly_forecast:,.0f}
-            """)
-        
-        with roi_col2:
-            avg_weekly_reactive = roi_metrics['total_reactive_cost'] / roi_metrics['forecast_period_weeks'] if roi_metrics['forecast_period_weeks'] > 0 else 0
-            st.markdown(f"""
-            **Reactive Staffing (Baseline):**
-            - Total Cost: ${roi_metrics['total_reactive_cost']:,.0f}
-            - Avg Agents: {roi_metrics['avg_agents_reactive']:.1f}
-            - Avg Weekly Cost: ${avg_weekly_reactive:,.0f}
-            """)
-        
-        # Additional ROI insights
-        if roi_metrics.get('annualized_savings', 0) > 0:
-            st.markdown(f"""
-            **Annualized Impact:** ${roi_metrics['annualized_savings']:,.0f} potential annual savings with forecast-based staffing
-            """)
-        
-        # Risk Periods
-        st.markdown("---")
-        st.subheader("High-Risk Periods Requiring Attention")
         risk_periods = identify_risk_periods(future_forecast)
-        high_risk = risk_periods[risk_periods['is_high_risk']][['ds', 'yhat', 'yhat_upper', 'risk_level']].copy()
-        high_risk['ds'] = high_risk['ds'].dt.strftime('%Y-%m-%d')
-        high_risk.columns = ['Date', 'Forecasted Volume', 'Upper Bound', 'Risk Level']
+        high_risk = risk_periods[risk_periods['combined_risk'].isin(['High', 'Medium'])].copy()
+        
         if len(high_risk) > 0:
-            st.dataframe(high_risk, use_container_width=True)
+            risk_display = high_risk[['ds', 'yhat', 'risk_level', 'combined_risk', 'recommendation']].copy()
+            risk_display['ds'] = risk_display['ds'].dt.strftime('%Y-%m-%d')
+            risk_display.columns = ['Date', 'Forecasted Volume', 'Volume Risk', 'Combined Risk', 'Recommendation']
+            
+            # Add staffing recommendations
+            risk_staffing = staffing_df[staffing_df['ds'].isin(high_risk['ds'])]
+            risk_display = risk_display.merge(
+                risk_staffing[['ds', 'agents_needed']],
+                left_on='Date',
+                right_on=risk_staffing['ds'].dt.strftime('%Y-%m-%d'),
+                how='left'
+            )
+            risk_display['Recommended Agents'] = risk_display['agents_needed']
+            risk_display = risk_display.drop('ds', axis=1, errors='ignore')
+            
+            st.dataframe(risk_display, use_container_width=True, height=300)
+            
+            # Summary statistics
+            st.markdown(f"""
+            **Risk Summary:**
+            - **High Risk Weeks**: {len(risk_periods[risk_periods['combined_risk'] == 'High'])}
+            - **Medium Risk Weeks**: {len(risk_periods[risk_periods['combined_risk'] == 'Medium'])}
+            - **Low Risk Weeks**: {len(risk_periods[risk_periods['combined_risk'] == 'Low'])}
+            """)
         else:
-            st.info("No high-risk periods identified in forecast period.")
+            st.success("✅ No high-risk periods identified. Forecast indicates manageable volume throughout the period.")
+        
+        # Uncertainty Warning
+        if 'worst_case_cost' in roi_metrics and roi_metrics['max_additional_cost'] > 0:
+            uncertainty_buffer = roi_metrics['max_additional_cost']
+            uncertainty_pct = (uncertainty_buffer / roi_metrics['total_forecast_cost'] * 100)
+            if uncertainty_pct > 10:
+                st.warning(f"""
+                **⚠️ Forecast Uncertainty**: Worst-case scenario could require 
+                additional ${uncertainty_buffer:,.0f} ({uncertainty_pct:.1f}%) 
+                in costs if upper bound forecasts materialize. Consider adding 
+                contingency buffer for high-uncertainty weeks.
+                """)
     
     with tab5:
         st.header("Forecast Components")

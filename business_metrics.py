@@ -123,113 +123,312 @@ def calculate_costs(staffing_df, hourly_rate=25.0, overhead_rate=1.35):
 
 def calculate_roi(forecast_df, historical_df, avg_handle_time=4.5, hourly_rate=25.0, overhead_rate=1.35):
     """
-    Calculate ROI of using forecasting vs. reactive staffing.
+    Calculate comprehensive ROI of using forecasting vs. alternative staffing strategies.
     
-    Compares:
-    - Forecast-based staffing: Staff for predicted volume each week
-    - Reactive staffing: Always staff for historical peak (overstaffing)
+    Compares three staffing approaches:
+    1. Forecast-based staffing: Optimal staffing based on predicted volume (recommended)
+    2. Reactive staffing: Always staff for historical peak (conservative but wasteful)
+    3. Average staffing: Staff for historical average (cheap but risky)
     
     Args:
-        forecast_df: Future forecast
+        forecast_df: Future forecast with 'yhat', 'yhat_lower', 'yhat_upper'
         historical_df: Historical data for comparison
         avg_handle_time: Average handle time in minutes
         hourly_rate: Hourly rate per agent
         overhead_rate: Overhead multiplier
     
     Returns:
-        Dictionary with ROI metrics
+        Dictionary with comprehensive ROI metrics
     """
-    # Calculate forecasted costs with optimal staffing
-    staffing_forecast = calculate_staffing_needs(forecast_df, avg_handle_time)
+    service_level = 0.80
+    
+    # 1. Forecast-based staffing (optimal)
+    staffing_forecast = calculate_staffing_needs(forecast_df, avg_handle_time, service_level)
     costs_forecast = calculate_costs(staffing_forecast, hourly_rate, overhead_rate)
     
-    # Calculate what costs would be with reactive staffing (always staff for peak)
-    # This represents the "old way" - staff for worst case every week
+    # 2. Reactive staffing: Always staff for peak (conservative approach)
     peak_volume = historical_df['y'].max()
-    
-    # Create DataFrame with same structure as forecast_df, but with peak volume
     reactive_forecast = pd.DataFrame({
         'ds': forecast_df['ds'].copy(),
         'yhat': [peak_volume] * len(forecast_df)
     })
-    reactive_staffing = calculate_staffing_needs(
-        reactive_forecast,
-        avg_handle_time
-    )
+    reactive_staffing = calculate_staffing_needs(reactive_forecast, avg_handle_time, service_level)
     reactive_costs = calculate_costs(reactive_staffing, hourly_rate, overhead_rate)
     
-    # Calculate savings from forecasting
+    # 3. Average staffing: Staff for historical average (risky but cheaper)
+    avg_volume = historical_df['y'].mean()
+    avg_forecast = pd.DataFrame({
+        'ds': forecast_df['ds'].copy(),
+        'yhat': [avg_volume] * len(forecast_df)
+    })
+    avg_staffing = calculate_staffing_needs(avg_forecast, avg_handle_time, service_level)
+    avg_costs = calculate_costs(avg_staffing, hourly_rate, overhead_rate)
+    
+    # Calculate costs
     total_forecast_cost = costs_forecast['weekly_cost'].sum()
     total_reactive_cost = reactive_costs['weekly_cost'].sum()
-    savings = total_reactive_cost - total_forecast_cost
-    savings_pct = (savings / total_reactive_cost * 100) if total_reactive_cost > 0 else 0
+    total_avg_cost = avg_costs['weekly_cost'].sum()
     
-    # Calculate average metrics
+    # Savings vs reactive (conservative baseline)
+    savings_vs_reactive = total_reactive_cost - total_forecast_cost
+    savings_pct_vs_reactive = (savings_vs_reactive / total_reactive_cost * 100) if total_reactive_cost > 0 else 0
+    
+    # Additional cost vs average (trade-off for better service)
+    additional_vs_avg = total_forecast_cost - total_avg_cost
+    additional_pct_vs_avg = (additional_vs_avg / total_avg_cost * 100) if total_avg_cost > 0 else 0
+    
+    # Average metrics
     avg_agents_forecast = staffing_forecast['agents_needed'].mean()
     avg_agents_reactive = reactive_staffing['agents_needed'].mean()
-    avg_weekly_cost_forecast = costs_forecast['weekly_cost'].mean()
-    avg_weekly_cost_reactive = reactive_costs['weekly_cost'].mean()
+    avg_agents_avg = avg_staffing['agents_needed'].mean()
     
-    # Calculate annualized savings (extrapolate to full year)
+    # Cost efficiency metrics
+    avg_cost_per_call_forecast = costs_forecast['cost_per_call'].mean()
+    avg_cost_per_call_reactive = reactive_costs['cost_per_call'].mean()
+    avg_cost_per_call_avg = avg_costs['cost_per_call'].mean()
+    
+    # Forecast uncertainty impact (worst case scenario)
+    if 'yhat_upper' in forecast_df.columns:
+        worst_case_forecast = pd.DataFrame({
+            'ds': forecast_df['ds'].copy(),
+            'yhat': forecast_df['yhat_upper'].values
+        })
+        worst_staffing = calculate_staffing_needs(worst_case_forecast, avg_handle_time, service_level)
+        worst_costs = calculate_costs(worst_staffing, hourly_rate, overhead_rate)
+        worst_case_cost = worst_costs['weekly_cost'].sum()
+        max_additional_cost = worst_case_cost - total_forecast_cost
+    else:
+        worst_case_cost = total_forecast_cost
+        max_additional_cost = 0
+    
+    # Annualized metrics
     weeks_per_year = 52
-    annual_savings = (savings / len(forecast_df)) * weeks_per_year if len(forecast_df) > 0 else 0
+    forecast_period_weeks = len(forecast_df)
+    annual_savings_vs_reactive = (savings_vs_reactive / forecast_period_weeks * weeks_per_year) if forecast_period_weeks > 0 else 0
+    annual_cost_forecast = (total_forecast_cost / forecast_period_weeks * weeks_per_year) if forecast_period_weeks > 0 else 0
+    
+    # Historical comparison (what was average weekly cost in recent history?)
+    recent_historical = historical_df.tail(13)  # Last quarter
+    if len(recent_historical) > 0:
+        hist_staffing = calculate_staffing_needs(
+            pd.DataFrame({'ds': recent_historical['ds'], 'yhat': recent_historical['y']}),
+            avg_handle_time, service_level
+        )
+        hist_costs = calculate_costs(hist_staffing, hourly_rate, overhead_rate)
+        avg_historical_weekly_cost = hist_costs['weekly_cost'].mean()
+        forecast_vs_historical = costs_forecast['weekly_cost'].mean() - avg_historical_weekly_cost
+        forecast_vs_historical_pct = (forecast_vs_historical / avg_historical_weekly_cost * 100) if avg_historical_weekly_cost > 0 else 0
+    else:
+        avg_historical_weekly_cost = 0
+        forecast_vs_historical = 0
+        forecast_vs_historical_pct = 0
     
     return {
-        'forecast_period_weeks': len(forecast_df),
+        'forecast_period_weeks': forecast_period_weeks,
+        
+        # Forecast-based (optimal)
         'total_forecast_cost': total_forecast_cost,
-        'total_reactive_cost': total_reactive_cost,
-        'total_savings': savings,
-        'savings_percentage': savings_pct,
-        'annualized_savings': annual_savings,
+        'avg_weekly_cost_forecast': costs_forecast['weekly_cost'].mean(),
         'avg_agents_forecast': avg_agents_forecast,
+        'avg_cost_per_call_forecast': avg_cost_per_call_forecast,
+        
+        # Reactive (conservative)
+        'total_reactive_cost': total_reactive_cost,
+        'avg_weekly_cost_reactive': reactive_costs['weekly_cost'].mean(),
         'avg_agents_reactive': avg_agents_reactive,
-        'agents_saved': avg_agents_reactive - avg_agents_forecast,
-        'avg_weekly_cost_forecast': avg_weekly_cost_forecast,
-        'avg_weekly_cost_reactive': avg_weekly_cost_reactive,
-        'avg_weekly_savings': avg_weekly_cost_reactive - avg_weekly_cost_forecast
+        'avg_cost_per_call_reactive': avg_cost_per_call_reactive,
+        
+        # Average-based (risky)
+        'total_avg_cost': total_avg_cost,
+        'avg_weekly_cost_avg': avg_costs['weekly_cost'].mean(),
+        'avg_agents_avg': avg_agents_avg,
+        'avg_cost_per_call_avg': avg_cost_per_call_avg,
+        
+        # Savings metrics
+        'total_savings': savings_vs_reactive,  # vs reactive (for backward compatibility)
+        'savings_percentage': savings_pct_vs_reactive,  # vs reactive
+        'savings_vs_reactive': savings_vs_reactive,
+        'savings_pct_vs_reactive': savings_pct_vs_reactive,
+        'additional_vs_avg': additional_vs_avg,
+        'additional_pct_vs_avg': additional_pct_vs_avg,
+        'agents_saved': avg_agents_reactive - avg_agents_forecast,  # vs reactive
+        
+        # Uncertainty metrics
+        'worst_case_cost': worst_case_cost,
+        'max_additional_cost': max_additional_cost,
+        'confidence_range_cost': worst_case_cost - total_forecast_cost,
+        
+        # Annualized
+        'annualized_savings': annual_savings_vs_reactive,
+        'annual_cost_forecast': annual_cost_forecast,
+        
+        # Historical comparison
+        'avg_historical_weekly_cost': avg_historical_weekly_cost,
+        'forecast_vs_historical': forecast_vs_historical,
+        'forecast_vs_historical_pct': forecast_vs_historical_pct
     }
+
+
+def calculate_service_quality_metrics(forecast_df, staffing_df, avg_handle_time=4.5, service_level_target=0.80):
+    """
+    Calculate expected service quality metrics based on forecast and staffing.
+    
+    Args:
+        forecast_df: Forecast with 'yhat' (expected volume)
+        staffing_df: Staffing needs from calculate_staffing_needs
+        avg_handle_time: Average handle time in minutes
+        service_level_target: Target service level
+    
+    Returns:
+        DataFrame with service quality metrics
+    """
+    result = staffing_df[['ds', 'yhat', 'agents_needed']].copy()
+    
+    # Calculate expected service level (approximation)
+    # Higher occupancy = lower service level (more busy = longer wait times)
+    result['expected_occupancy'] = (result['yhat'] * avg_handle_time / 60) / (result['agents_needed'] * 40)
+    result['expected_occupancy'] = np.clip(result['expected_occupancy'], 0, 1)
+    
+    # Estimate service level based on occupancy (empirical relationship)
+    # At 80% occupancy, typically achieve ~80% service level
+    # At 90% occupancy, service level drops to ~60%
+    # At 70% occupancy, service level improves to ~90%
+    result['estimated_service_level'] = np.clip(
+        1.0 - (result['expected_occupancy'] - service_level_target) * 2.0,
+        0.50, 0.95
+    )
+    
+    # Estimate average wait time (approximation)
+    # Higher occupancy = longer wait times
+    base_wait_time = 30  # Base wait time in seconds when occupancy is at target
+    result['estimated_avg_wait_sec'] = base_wait_time * (result['expected_occupancy'] / service_level_target) ** 2
+    result['estimated_avg_wait_sec'] = np.clip(result['estimated_avg_wait_sec'], 10, 300)
+    
+    # Risk of service level failure
+    result['service_level_risk'] = result['estimated_service_level'] < service_level_target
+    result['service_level_deficit'] = np.maximum(0, service_level_target - result['estimated_service_level'])
+    
+    return result
 
 
 def identify_risk_periods(forecast_df, threshold_percentile=75):
     """
-    Identify high-risk periods that need attention.
+    Identify high-risk periods that need attention based on volume and uncertainty.
     
     Args:
-        forecast_df: Forecast DataFrame
+        forecast_df: Forecast DataFrame with 'yhat', optionally 'yhat_upper', 'yhat_lower'
         threshold_percentile: Percentile above which is considered high-risk
     
     Returns:
-        DataFrame with risk flags
+        DataFrame with risk flags and recommendations
     """
     threshold = forecast_df['yhat'].quantile(threshold_percentile / 100)
     max_val = forecast_df['yhat'].max()
+    mean_val = forecast_df['yhat'].mean()
     
     result = forecast_df.copy()
     result['is_high_risk'] = result['yhat'] >= threshold
     
-    # Ensure bins are unique by adding small epsilon if needed
-    low_bound = threshold * 0.8
-    mid_bound = threshold
-    high_bound = max_val + 1  # Add 1 to ensure it's always higher than max
+    # Calculate uncertainty risk (if confidence intervals available)
+    if 'yhat_upper' in forecast_df.columns and 'yhat_lower' in forecast_df.columns:
+        result['uncertainty_range'] = result['yhat_upper'] - result['yhat_lower']
+        result['uncertainty_pct'] = (result['uncertainty_range'] / result['yhat']) * 100
+        high_uncertainty_threshold = result['uncertainty_pct'].quantile(0.75)
+        result['high_uncertainty'] = result['uncertainty_pct'] >= high_uncertainty_threshold
+    else:
+        result['uncertainty_range'] = 0
+        result['uncertainty_pct'] = 0
+        result['high_uncertainty'] = False
     
-    # Make sure bins are strictly increasing
-    if mid_bound <= low_bound:
-        mid_bound = low_bound + 1
-    if high_bound <= mid_bound:
-        high_bound = mid_bound + 1
+    # Risk levels
+    result['risk_level'] = 'Low'
+    result.loc[result['yhat'] >= threshold, 'risk_level'] = 'High'
+    result.loc[(result['yhat'] >= threshold * 0.85) & (result['yhat'] < threshold), 'risk_level'] = 'Medium'
     
-    try:
-        result['risk_level'] = pd.cut(
-            result['yhat'],
-            bins=[0, low_bound, mid_bound, high_bound],
-            labels=['Low', 'Medium', 'High'],
-            duplicates='drop'
-        )
-    except ValueError:
-        # Fallback: simple classification
-        result['risk_level'] = result['yhat'].apply(
-            lambda x: 'High' if x >= threshold else ('Medium' if x >= threshold * 0.8 else 'Low')
-        )
+    # Combined risk (volume + uncertainty)
+    result['combined_risk'] = 'Low'
+    result.loc[result['is_high_risk'] | result['high_uncertainty'], 'combined_risk'] = 'Medium'
+    result.loc[result['is_high_risk'] & result['high_uncertainty'], 'combined_risk'] = 'High'
+    
+    # Generate recommendations
+    def get_recommendation(row):
+        if row['combined_risk'] == 'High':
+            if row['high_uncertainty']:
+                return "Increase staffing buffer due to high volume and uncertainty"
+            else:
+                return "Increase staffing for high volume period"
+        elif row['combined_risk'] == 'Medium':
+            if row['high_uncertainty']:
+                return "Monitor closely - high uncertainty in forecast"
+            else:
+                return "Standard staffing should suffice"
+        else:
+            return "Low volume period - consider flexible staffing"
+    
+    result['recommendation'] = result.apply(get_recommendation, axis=1)
     
     return result
+
+
+def calculate_budget_impact(forecast_df, costs_df, historical_df=None):
+    """
+    Calculate budget planning metrics for the forecast period.
+    
+    Args:
+        forecast_df: Forecast DataFrame
+        costs_df: Costs DataFrame from calculate_costs
+        historical_df: Optional historical data for comparison
+    
+    Returns:
+        Dictionary with budget metrics
+    """
+    total_cost = costs_df['weekly_cost'].sum()
+    avg_weekly_cost = costs_df['weekly_cost'].mean()
+    peak_weekly_cost = costs_df['weekly_cost'].max()
+    min_weekly_cost = costs_df['weekly_cost'].min()
+    
+    # Monthly aggregation
+    costs_df_monthly = costs_df.copy()
+    costs_df_monthly['year_month'] = pd.to_datetime(costs_df_monthly['ds']).dt.to_period('M')
+    monthly_costs = costs_df_monthly.groupby('year_month')['weekly_cost'].sum()
+    
+    # Quarterly aggregation
+    costs_df_quarterly = costs_df.copy()
+    costs_df_quarterly['quarter'] = pd.to_datetime(costs_df_quarterly['ds']).dt.to_period('Q')
+    quarterly_costs = costs_df_quarterly.groupby('quarter')['weekly_cost'].sum()
+    
+    # Cost trend
+    cost_trend = 'Stable'
+    if len(costs_df) >= 4:
+        recent_avg = costs_df['weekly_cost'].tail(4).mean()
+        early_avg = costs_df['weekly_cost'].head(4).mean()
+        if recent_avg > early_avg * 1.05:
+            cost_trend = 'Increasing'
+        elif recent_avg < early_avg * 0.95:
+            cost_trend = 'Decreasing'
+    
+    # Historical comparison
+    historical_avg_cost = None
+    cost_change_pct = None
+    if historical_df is not None and len(historical_df) > 0:
+        hist_staffing = calculate_staffing_needs(
+            pd.DataFrame({'ds': historical_df['ds'], 'yhat': historical_df['y']}),
+            4.5, 0.80
+        )
+        hist_costs = calculate_costs(hist_staffing, 25.0, 1.35)
+        historical_avg_cost = hist_costs['weekly_cost'].mean()
+        cost_change_pct = ((avg_weekly_cost - historical_avg_cost) / historical_avg_cost * 100) if historical_avg_cost > 0 else 0
+    
+    return {
+        'total_cost': total_cost,
+        'avg_weekly_cost': avg_weekly_cost,
+        'peak_weekly_cost': peak_weekly_cost,
+        'min_weekly_cost': min_weekly_cost,
+        'cost_range': peak_weekly_cost - min_weekly_cost,
+        'monthly_costs': monthly_costs.to_dict() if len(monthly_costs) > 0 else {},
+        'quarterly_costs': quarterly_costs.to_dict() if len(quarterly_costs) > 0 else {},
+        'cost_trend': cost_trend,
+        'historical_avg_cost': historical_avg_cost,
+        'cost_change_pct': cost_change_pct
+    }
 
