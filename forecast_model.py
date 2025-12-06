@@ -660,18 +660,19 @@ class EnsembleForecaster:
         self.holtwinters.fit(df)
         
         # Try to fit neural network models if TensorFlow available
-        if TENSORFLOW_AVAILABLE and len(df) >= 30:
-            try:
-                self.lstm = LSTMForecaster()
-                self.lstm.fit(df)
-            except Exception:
-                self.lstm = None
-            
-            try:
-                self.nn = NeuralNetworkForecaster()
-                self.nn.fit(df)
-            except Exception:
-                self.nn = None
+        # Temporarily disabled for faster training
+        # if TENSORFLOW_AVAILABLE and len(df) >= 30:
+        #     try:
+        #         self.lstm = LSTMForecaster()
+        #         self.lstm.fit(df)
+        #     except Exception:
+        #         self.lstm = None
+        #     
+        #     try:
+        #         self.nn = NeuralNetworkForecaster()
+        #         self.nn.fit(df)
+        #     except Exception:
+        #         self.nn = None
         
         # Cross-validation to determine weights
         n = len(df)
@@ -940,11 +941,12 @@ def compare_all_models(df_train, df_test, forecast_periods):
     ]
     
     # Add neural network models if TensorFlow available
-    if TENSORFLOW_AVAILABLE and len(df_train) >= 30:
-        model_configs.extend([
-            ('lstm', 'LSTM (Deep Learning)', {'model_type': 'lstm'}),
-            ('nn', 'Neural Network (MLP)', {'model_type': 'nn'}),
-        ])
+    # Temporarily disabled for faster training - can be enabled if needed
+    # if TENSORFLOW_AVAILABLE and len(df_train) >= 30:
+    #     model_configs.extend([
+    #         ('lstm', 'LSTM (Deep Learning)', {'model_type': 'lstm'}),
+    #         ('nn', 'Neural Network (MLP)', {'model_type': 'nn'}),
+    #     ])
     
     for key, name, kwargs in model_configs:
         try:
