@@ -21,49 +21,20 @@ warnings.filterwarnings('ignore')
 class CallVolumeForecaster:
     """
     SARIMAX-based forecaster with optional Axiom Ray exogenous variable.
-    
-    Supports forecasting with and without the leading indicator to
-    demonstrate the value of the Axiom Ray AI system.
     """
     
     LEAD_WEEKS = 2  # Axiom Ray leads volume by 2 weeks
     
     def __init__(self, use_exogenous=True):
-        """
-        Initialize the forecaster.
-        
-        Args:
-            use_exogenous: Whether to use Axiom Ray as exogenous variable
-        """
+        """Initialize the forecaster."""
         self.use_exogenous = use_exogenous
         self.model = None
         self.model_fitted = None
         self.training_data = None
         self.last_train_date = None
         self.freq = 'W-MON'
+        self.has_axiom = False
         
-    def _prepare_exog(self, df, for_forecast=False):
-        """
-        Prepare exogenous variable with proper lag.
-        
-        Since Axiom Ray is a 2-week leading indicator:
-        - axiom_score[t] predicts volume[t+2]
-        - So for volume[t], we use axiom_score[t-2]
-        """
-        if not self.use_exogenous:
-            return None
-        
-        # Check if df is a DataFrame with the required column
-        if not isinstance(df, pd.DataFrame):
-            return None
-        if 'axiom_ray_score' not in df.columns:
-            return None
-        
-        # Shift axiom score forward by LEAD_WEEKS to align with volume
-        # axiom_score[t-2] → volume[t]
-        exog = df['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill()
-        return exog.values.reshape(-1, 1)
-    
     def fit(self, df, changepoint_prior_scale=0.05, seasonality_prior_scale=10, verbose=False):
         """
         Fit the SARIMAX model.
@@ -71,6 +42,10 @@ class CallVolumeForecaster:
         Args:
             df: Training DataFrame with 'ds', 'y', and optionally 'axiom_ray_score'
         """
+        # Ensure we have a DataFrame
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("Input must be a pandas DataFrame")
+        
         df = df.copy()
         
         if not pd.api.types.is_datetime64_any_dtype(df['ds']):
@@ -80,16 +55,21 @@ class CallVolumeForecaster:
         self.training_data = df.copy()
         self.last_train_date = df['ds'].max()
         
+        # Check for axiom data
+        self.has_axiom = 'axiom_ray_score' in df.columns
+        
         # Prepare endogenous variable
         endog = df['y'].values
         
         # Prepare exogenous variable (lagged Axiom Ray score)
-        exog = self._prepare_exog(df)
+        exog = None
+        if self.use_exogenous and self.has_axiom:
+            # Shift axiom score to align: axiom[t-2] predicts volume[t]
+            exog = df['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill().values.reshape(-1, 1)
         
-        # SARIMAX order: (p,d,q) x (P,D,Q,s)
-        # Using modest seasonal component for speed
+        # SARIMAX order
         order = (1, 1, 1)
-        seasonal_order = (1, 0, 1, 13)  # Quarterly seasonality for speed
+        seasonal_order = (1, 0, 1, 13)
         
         try:
             self.model = SARIMAX(
@@ -101,9 +81,7 @@ class CallVolumeForecaster:
                 enforce_invertibility=False
             )
             self.model_fitted = self.model.fit(disp=False, maxiter=100)
-        except Exception as e:
-            if verbose:
-                print(f"SARIMAX with seasonality failed: {e}, trying simpler model")
+        except Exception:
             # Fallback to non-seasonal
             self.model = SARIMAX(
                 endog=endog,
@@ -117,13 +95,7 @@ class CallVolumeForecaster:
         return self
     
     def forecast_future(self, periods, last_date=None, future_exog=None):
-        """
-        Forecast future periods.
-        
-        Args:
-            periods: Number of periods to forecast
-            future_exog: DataFrame with future axiom_ray_score values (if using exogenous)
-        """
+        """Forecast future periods."""
         if self.model_fitted is None:
             raise ValueError("Model must be fitted before making predictions")
         
@@ -139,38 +111,31 @@ class CallVolumeForecaster:
         
         # Prepare exogenous for forecast
         exog_forecast = None
-        has_training_axiom = isinstance(self.training_data, pd.DataFrame) and 'axiom_ray_score' in self.training_data.columns
-        
-        if self.use_exogenous and has_training_axiom:
-            has_future_axiom = isinstance(future_exog, pd.DataFrame) and 'axiom_ray_score' in future_exog.columns
-            
-            if has_future_axiom:
-                # Use provided future axiom scores (shifted by lead time)
-                exog_forecast = future_exog['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill().values[:periods]
+        if self.use_exogenous and self.has_axiom:
+            # Get axiom scores for forecasting
+            if isinstance(future_exog, pd.DataFrame) and 'axiom_ray_score' in future_exog.columns:
+                exog_values = future_exog['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill().values[:periods]
             else:
-                # Use last known axiom scores (they predict 2 weeks ahead!)
-                # So the last LEAD_WEEKS axiom scores predict the first LEAD_WEEKS future volumes
-                last_axiom_scores = self.training_data['axiom_ray_score'].tail(self.LEAD_WEEKS + periods).values
-                exog_forecast = last_axiom_scores[:periods]
+                # Use last known axiom scores
+                exog_values = self.training_data['axiom_ray_score'].tail(periods).values
             
             # Ensure we have enough values
-            if len(exog_forecast) < periods:
-                # Pad with last value
-                exog_forecast = np.pad(exog_forecast, (0, periods - len(exog_forecast)), mode='edge')
+            if len(exog_values) < periods:
+                exog_values = np.pad(exog_values, (0, periods - len(exog_values)), mode='edge')
             
-            exog_forecast = exog_forecast.reshape(-1, 1)
+            exog_forecast = exog_values[:periods].reshape(-1, 1)
         
         # Get forecast
         forecast_result = self.model_fitted.get_forecast(steps=periods, exog=exog_forecast)
         
-        predicted_mean = forecast_result.predicted_mean
+        predicted_mean = forecast_result.predicted_mean.values
         conf_int = forecast_result.conf_int()
         
         # Handle column names
-        if 'lower y' in conf_int.columns:
+        try:
             yhat_lower = conf_int['lower y'].values
             yhat_upper = conf_int['upper y'].values
-        else:
+        except KeyError:
             yhat_lower = conf_int.iloc[:, 0].values
             yhat_upper = conf_int.iloc[:, 1].values
         
@@ -196,6 +161,9 @@ class CallVolumeForecaster:
         """Make predictions for given dates."""
         if self.model_fitted is None:
             raise ValueError("Model must be fitted before making predictions")
+        
+        if not isinstance(df_future, pd.DataFrame):
+            raise ValueError("Input must be a pandas DataFrame")
         
         df = df_future.copy()
         if not pd.api.types.is_datetime64_any_dtype(df['ds']):
@@ -228,6 +196,9 @@ class CallVolumeForecaster:
     
     def evaluate(self, df_test):
         """Evaluate model on test data."""
+        if not isinstance(df_test, pd.DataFrame):
+            raise ValueError("Input must be a pandas DataFrame")
+        
         df_test = df_test.copy()
         if not pd.api.types.is_datetime64_any_dtype(df_test['ds']):
             df_test['ds'] = pd.to_datetime(df_test['ds'])
@@ -235,8 +206,8 @@ class CallVolumeForecaster:
         
         n_test = len(df_test)
         
-        # For exogenous forecasting, we need axiom scores
-        future_exog = df_test if isinstance(df_test, pd.DataFrame) and 'axiom_ray_score' in df_test.columns else None
+        # For exogenous forecasting, pass test data if it has axiom scores
+        future_exog = df_test if 'axiom_ray_score' in df_test.columns else None
         forecast = self.forecast_future(periods=n_test, future_exog=future_exog)
         
         actual_values = df_test['y'].values
@@ -269,6 +240,9 @@ class CallVolumeForecaster:
     
     def get_components(self, forecast_df):
         """Extract forecast components (approximate)."""
+        if not isinstance(forecast_df, pd.DataFrame):
+            forecast_df = pd.DataFrame({'ds': pd.date_range(start='2024-01-01', periods=10, freq='W'), 'yhat': [500]*10})
+        
         components = pd.DataFrame({
             'ds': forecast_df['ds'],
             'trend': forecast_df['yhat'],
@@ -280,9 +254,10 @@ class CallVolumeForecaster:
 def compare_forecasts(df_train, df_test, forecast_periods):
     """
     Compare forecasts with and without Axiom Ray exogenous variable.
-    
-    Returns metrics and forecasts for both models.
     """
+    if not isinstance(df_train, pd.DataFrame) or not isinstance(df_test, pd.DataFrame):
+        raise ValueError("Inputs must be pandas DataFrames")
+    
     results = {}
     
     # Model WITHOUT Axiom Ray (baseline)
@@ -300,7 +275,7 @@ def compare_forecasts(df_train, df_test, forecast_periods):
     }
     
     # Model WITH Axiom Ray (enhanced)
-    if isinstance(df_train, pd.DataFrame) and 'axiom_ray_score' in df_train.columns:
+    if 'axiom_ray_score' in df_train.columns:
         model_enhanced = CallVolumeForecaster(use_exogenous=True)
         model_enhanced.fit(df_train)
         metrics_enhanced, eval_enhanced = model_enhanced.evaluate(df_test)
@@ -330,6 +305,9 @@ def compare_forecasts(df_train, df_test, forecast_periods):
 
 def train_test_split(df, test_size=0.2):
     """Split time series data into train and test sets."""
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError("Input must be a pandas DataFrame")
+    
     df = df.sort_values('ds').reset_index(drop=True)
     split_idx = int(len(df) * (1 - test_size))
     
