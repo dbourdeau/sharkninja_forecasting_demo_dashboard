@@ -196,7 +196,7 @@ class SARIMAXForecaster:
 
 
 class HoltWintersForecaster:
-    """Holt-Winters Triple Exponential Smoothing with automatic model selection."""
+    """Holt-Winters Triple Exponential Smoothing - forces trend and seasonality."""
     
     def __init__(self):
         self.model = None
@@ -205,6 +205,7 @@ class HoltWintersForecaster:
         self.last_train_date = None
         self.trend_slope = 0
         self.trend_intercept = 0
+        self.seasonal_pattern = None
         self.name = "Holt-Winters"
         
     def fit(self, df):
@@ -219,45 +220,52 @@ class HoltWintersForecaster:
         self.training_data = df.copy()
         self.last_train_date = df['ds'].max()
         
-        y = np.array(df['y'])
+        y = np.array(df['y']).astype(float)
         n = len(y)
         
-        # Detect trend for backup
+        # Detect trend
         _, self.trend_slope, self.trend_intercept = detect_trend(y, return_slope=True)
         
-        # Try multiple configurations
-        best_aic = np.inf
+        # Extract seasonal pattern from data (quarterly = 13 weeks)
+        seasonal_period = 13
+        if n >= 2 * seasonal_period:
+            # Compute average seasonal pattern
+            detrended = y - (self.trend_intercept + self.trend_slope * np.arange(n))
+            n_complete = (n // seasonal_period) * seasonal_period
+            seasonal_matrix = detrended[:n_complete].reshape(-1, seasonal_period)
+            self.seasonal_pattern = np.mean(seasonal_matrix, axis=0)
+        else:
+            self.seasonal_pattern = np.zeros(seasonal_period)
+        
+        # Force use of additive trend and seasonality with NO damping for clear projections
         best_model = None
         
-        seasonal_periods = [13, 26] if n >= 52 else [13]
-        
-        configs = []
-        for sp in seasonal_periods:
-            if n >= 2 * sp:
-                configs.extend([
-                    {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': sp, 'damped_trend': True},
-                    {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': sp, 'damped_trend': False},
-                    {'trend': 'add', 'seasonal': 'mul', 'seasonal_periods': sp, 'damped_trend': True},
-                ])
-        
-        # Fallback configs without seasonality
-        configs.append({'trend': 'add', 'seasonal': None, 'damped_trend': True})
-        configs.append({'trend': 'add', 'seasonal': None, 'damped_trend': False})
+        # Priority: seasonal models first (with non-damped trend)
+        configs = [
+            {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': 13, 'damped_trend': False},
+            {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': 13, 'damped_trend': True},
+            {'trend': 'add', 'seasonal': 'mul', 'seasonal_periods': 13, 'damped_trend': False},
+            {'trend': 'add', 'seasonal': None, 'damped_trend': False},  # No damping fallback
+        ]
         
         for config in configs:
             try:
-                model = ExponentialSmoothing(y, **config)
-                fitted = model.fit(optimized=True)
-                if fitted.aic < best_aic:
-                    best_aic = fitted.aic
-                    best_model = fitted
-                    self.model = model
+                # Ensure positive values for multiplicative
+                y_fit = y.copy()
+                if config.get('seasonal') == 'mul':
+                    y_fit = np.maximum(y_fit, 1)
+                
+                model = ExponentialSmoothing(y_fit, **config)
+                fitted = model.fit(optimized=True, use_brute=True)
+                best_model = fitted
+                self.model = model
+                break  # Use first successful model
             except Exception:
                 continue
         
         if best_model is None:
-            # Ultimate fallback
-            self.model = ExponentialSmoothing(y, trend='add', damped_trend=True)
+            # Ultimate fallback - simple exponential smoothing with trend
+            self.model = ExponentialSmoothing(y, trend='add', damped_trend=False)
             best_model = self.model.fit(optimized=True)
         
         self.model_fitted = best_model
@@ -268,29 +276,55 @@ class HoltWintersForecaster:
             raise ValueError("Model must be fitted first")
         
         n_train = len(self.training_data)
+        y = np.array(self.training_data['y'])
         
         future_dates = pd.date_range(
             start=self.last_train_date + pd.Timedelta(days=7),
             periods=periods, freq='W-MON'
         )
         
+        # Get base forecast from model
         forecast_result = self.model_fitted.forecast(periods)
         predicted_mean = np.array(forecast_result)
         
-        # Check if forecast is too flat
+        # Always add explicit trend and seasonality continuation
+        # This ensures forecasts continue observed patterns
+        
+        # 1. Trend projection
+        trend_projection = project_trend(self.trend_slope, self.trend_intercept, n_train, periods)
+        
+        # 2. Seasonal projection (repeat pattern)
+        seasonal_period = 13
+        seasonal_projection = np.zeros(periods)
+        if self.seasonal_pattern is not None and len(self.seasonal_pattern) > 0:
+            start_phase = n_train % seasonal_period
+            for i in range(periods):
+                seasonal_projection[i] = self.seasonal_pattern[(start_phase + i) % seasonal_period]
+        
+        # 3. Combine: use model forecast but ensure it follows trend
+        last_actual = y[-1]
+        model_level = predicted_mean[0]  # Where model thinks we are
+        
+        # Adjust model forecast to continue from last actual
+        level_adjustment = last_actual - model_level
+        adjusted_forecast = predicted_mean + level_adjustment
+        
+        # If model forecast is too flat, blend with trend + seasonality
         forecast_range = np.max(predicted_mean) - np.min(predicted_mean)
-        historical_range = np.max(self.training_data['y']) - np.min(self.training_data['y'])
+        historical_std = np.std(y[-26:])  # Recent volatility
         
-        if forecast_range < 0.1 * historical_range:
-            # Add trend continuation
-            trend_projection = project_trend(self.trend_slope, self.trend_intercept, n_train, periods)
-            last_actual = self.training_data['y'].iloc[-1]
-            trend_adjustment = trend_projection - trend_projection[0] + last_actual
-            predicted_mean = 0.5 * predicted_mean + 0.5 * trend_adjustment
+        if forecast_range < 0.3 * historical_std:
+            # Model is too flat - use trend + seasonality directly
+            trend_based = trend_projection + seasonal_projection
+            # Adjust to start from last actual
+            trend_based = trend_based - trend_based[0] + last_actual
+            predicted_mean = 0.3 * adjusted_forecast + 0.7 * trend_based
+        else:
+            predicted_mean = adjusted_forecast
         
-        # Confidence intervals from residuals
+        # Confidence intervals
         residuals = self.model_fitted.resid
-        std_resid = np.std(residuals) if len(residuals) > 0 else 50
+        std_resid = np.std(residuals) if len(residuals) > 0 else np.std(y) * 0.15
         
         # Widen CI as we go further out
         ci_multiplier = 1.96 * np.sqrt(1 + np.arange(periods) * 0.05)
