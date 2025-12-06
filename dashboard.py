@@ -1481,143 +1481,143 @@ RECOMMENDATIONS:
             if forecast_5day is None or len(forecast_5day) == 0:
                 st.error("Failed to generate forecast. Please check the model training.")
                 st.stop()
-        
-        # Forecast chart - show last 90 days for context
-        fig = go.Figure()
-        
-        # Historical (last 90 days for better context)
-        recent_daily = daily_df.tail(90)
-        fig.add_trace(go.Scatter(
-            x=recent_daily['ds'], y=recent_daily['y'],
-            name='Historical', line=dict(color='#1f77b4', width=2),
-            mode='lines+markers'
-        ))
-        
-        # Forecast
-        fig.add_trace(go.Scatter(
-            x=forecast_5day['ds'], y=forecast_5day['yhat'],
-            name='Forecast', line=dict(color='#2ca02c', width=3),
-            mode='lines+markers', marker=dict(size=10)
-        ))
-        
-        # Confidence interval
-        fig.add_trace(go.Scatter(
-            x=forecast_5day['ds'], y=forecast_5day['yhat_upper'],
-            name='Upper Bound', line=dict(width=0), mode='lines', showlegend=False
-        ))
-        fig.add_trace(go.Scatter(
-            x=forecast_5day['ds'], y=forecast_5day['yhat_lower'],
-            name='95% CI', line=dict(width=0), mode='lines',
-            fill='tonexty', fillcolor='rgba(44, 160, 44, 0.2)'
-        ))
-        
-        fig.update_layout(
-            title="Daily Call Volume - 5-Day Forecast",
-            xaxis_title="Date",
-            yaxis_title="Call Volume",
-            height=450,
-            hovermode='x unified'
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Staffing recommendations
-        st.subheader("Daily Staffing Recommendations")
-        
-        staffing_rec = get_staffing_recommendation(forecast_5day)
-        
-        # Display as cards
-        cols = st.columns(5)
-        for i, (_, row) in enumerate(staffing_rec.iterrows()):
-            with cols[i]:
-                day_color = '#2ca02c' if row['day'] not in ['Saturday', 'Sunday'] else '#ff7f0e'
-                st.markdown(f"""
-                <div style='background: linear-gradient(135deg, {day_color}22, {day_color}11); 
-                            padding: 15px; border-radius: 10px; text-align: center;
-                            border-left: 4px solid {day_color};'>
-                    <p style='font-weight: bold; font-size: 1.1rem; margin: 0;'>{row['day'][:3]}</p>
-                    <p style='font-size: 0.85rem; color: gray; margin: 5px 0;'>{row['date'].strftime('%m/%d')}</p>
-                    <p style='font-size: 1.5rem; font-weight: bold; margin: 10px 0;'>{row['forecast_calls']}</p>
-                    <p style='font-size: 0.8rem; color: gray;'>calls</p>
-                    <hr style='margin: 10px 0; border-color: {day_color}33;'>
-                    <p style='font-size: 1rem;'><strong>{row['agents_needed']}</strong> agents</p>
-                    <p style='font-size: 0.8rem; color: gray;'>{row['fte_needed']} FTE</p>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # Model comparison chart
-        st.subheader("Model Comparison on Test Data")
-        
-        if short_term_results and 'ensemble' in short_term_results:
-            eval_df = short_term_results['ensemble']['eval_df']
             
-            fig2 = go.Figure()
+            # Forecast chart - show last 90 days for context
+            fig = go.Figure()
             
-            # Actual
-            fig2.add_trace(go.Bar(
-                x=eval_df['day_name'], y=eval_df['y'],
-                name='Actual', marker_color='#1f77b4'
+            # Historical (last 90 days for better context)
+            recent_daily = daily_df.tail(90)
+            fig.add_trace(go.Scatter(
+                x=recent_daily['ds'], y=recent_daily['y'],
+                name='Historical', line=dict(color='#1f77b4', width=2),
+                mode='lines+markers'
             ))
             
-            # Predictions from each model
-            colors = {'ses': '#ff7f0e', 'arima': '#2ca02c', 'dow_avg': '#9467bd', 
-                     'lstm': '#d62728', 'nn': '#8c564b'}
-            for method in ['ses', 'arima', 'dow_avg', 'lstm', 'nn']:
-                if method in short_term_results:
-                    pred_col = f'{method}_forecast'
-                    if pred_col in eval_df.columns and eval_df[pred_col].notna().all():
-                        fig2.add_trace(go.Scatter(
-                            x=eval_df['day_name'], y=eval_df[pred_col],
-                            name=short_term_results[method]['name'],
-                            mode='markers+lines',
-                            line=dict(color=colors.get(method, '#888'), dash='dash'),
-                            marker=dict(size=10)
-                        ))
+            # Forecast
+            fig.add_trace(go.Scatter(
+                x=forecast_5day['ds'], y=forecast_5day['yhat'],
+                name='Forecast', line=dict(color='#2ca02c', width=3),
+                mode='lines+markers', marker=dict(size=10)
+            ))
             
-            fig2.update_layout(
-                title="5-Day Test: Actual vs Predicted by Model",
-                xaxis_title="Day",
+            # Confidence interval
+            fig.add_trace(go.Scatter(
+                x=forecast_5day['ds'], y=forecast_5day['yhat_upper'],
+                name='Upper Bound', line=dict(width=0), mode='lines', showlegend=False
+            ))
+            fig.add_trace(go.Scatter(
+                x=forecast_5day['ds'], y=forecast_5day['yhat_lower'],
+                name='95% CI', line=dict(width=0), mode='lines',
+                fill='tonexty', fillcolor='rgba(44, 160, 44, 0.2)'
+            ))
+            
+            fig.update_layout(
+                title="Daily Call Volume - 5-Day Forecast",
+                xaxis_title="Date",
                 yaxis_title="Call Volume",
-                height=400,
-                barmode='group'
+                height=450,
+                hovermode='x unified'
             )
-            st.plotly_chart(fig2, use_container_width=True)
-        
-        # Day-of-week patterns
-        st.subheader("Day-of-Week Patterns")
-        
-        dow_avg = daily_df.groupby('day_name')['y'].mean().reindex(
-            ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        )
-        
-        fig3 = go.Figure()
-        fig3.add_trace(go.Bar(
-            x=dow_avg.index, y=dow_avg.values,
-            marker_color=['#2ca02c' if d not in ['Saturday', 'Sunday'] else '#ff7f0e' 
-                         for d in dow_avg.index],
-            text=[f'{int(v)}' for v in dow_avg.values],
-            textposition='outside'
-        ))
-        fig3.update_layout(
-            title="Average Daily Volume by Day of Week",
-            xaxis_title="Day",
-            yaxis_title="Avg Call Volume",
-            height=350
-        )
-        st.plotly_chart(fig3, use_container_width=True)
-        
-        # Info box
-        st.info("""
-        **Short-Term Forecasting Methods (5-Day Horizon):**
-        - **Simple Exp. Smoothing**: Good for stable patterns
-        - **ARIMA(2,0,1)**: Captures short-term dynamics
-        - **Day-of-Week Average**: Uses historical day patterns
-        - **LSTM (Deep Learning)**: Recurrent neural network for sequential patterns
-        - **Neural Network (MLP)**: Feedforward network with lagged features and day-of-week encoding
-        - **Ensemble**: Combines all methods for robustness
-        """)
-        
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Staffing recommendations
+            st.subheader("Daily Staffing Recommendations")
+            
+            staffing_rec = get_staffing_recommendation(forecast_5day)
+            
+            # Display as cards
+            cols = st.columns(5)
+            for i, (_, row) in enumerate(staffing_rec.iterrows()):
+                with cols[i]:
+                    day_color = '#2ca02c' if row['day'] not in ['Saturday', 'Sunday'] else '#ff7f0e'
+                    st.markdown(f"""
+                    <div style='background: linear-gradient(135deg, {day_color}22, {day_color}11); 
+                                padding: 15px; border-radius: 10px; text-align: center;
+                                border-left: 4px solid {day_color};'>
+                        <p style='font-weight: bold; font-size: 1.1rem; margin: 0;'>{row['day'][:3]}</p>
+                        <p style='font-size: 0.85rem; color: gray; margin: 5px 0;'>{row['date'].strftime('%m/%d')}</p>
+                        <p style='font-size: 1.5rem; font-weight: bold; margin: 10px 0;'>{row['forecast_calls']}</p>
+                        <p style='font-size: 0.8rem; color: gray;'>calls</p>
+                        <hr style='margin: 10px 0; border-color: {day_color}33;'>
+                        <p style='font-size: 1rem;'><strong>{row['agents_needed']}</strong> agents</p>
+                        <p style='font-size: 0.8rem; color: gray;'>{row['fte_needed']} FTE</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Model comparison chart
+            st.subheader("Model Comparison on Test Data")
+            
+            if short_term_results and 'ensemble' in short_term_results:
+                eval_df = short_term_results['ensemble']['eval_df']
+                
+                fig2 = go.Figure()
+                
+                # Actual
+                fig2.add_trace(go.Bar(
+                    x=eval_df['day_name'], y=eval_df['y'],
+                    name='Actual', marker_color='#1f77b4'
+                ))
+                
+                # Predictions from each model
+                colors = {'ses': '#ff7f0e', 'arima': '#2ca02c', 'dow_avg': '#9467bd', 
+                         'lstm': '#d62728', 'nn': '#8c564b'}
+                for method in ['ses', 'arima', 'dow_avg', 'lstm', 'nn']:
+                    if method in short_term_results:
+                        pred_col = f'{method}_forecast'
+                        if pred_col in eval_df.columns and eval_df[pred_col].notna().all():
+                            fig2.add_trace(go.Scatter(
+                                x=eval_df['day_name'], y=eval_df[pred_col],
+                                name=short_term_results[method]['name'],
+                                mode='markers+lines',
+                                line=dict(color=colors.get(method, '#888'), dash='dash'),
+                                marker=dict(size=10)
+                            ))
+                
+                fig2.update_layout(
+                    title="5-Day Test: Actual vs Predicted by Model",
+                    xaxis_title="Day",
+                    yaxis_title="Call Volume",
+                    height=400,
+                    barmode='group'
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+            
+            # Day-of-week patterns
+            st.subheader("Day-of-Week Patterns")
+            
+            dow_avg = daily_df.groupby('day_name')['y'].mean().reindex(
+                ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            )
+            
+            fig3 = go.Figure()
+            fig3.add_trace(go.Bar(
+                x=dow_avg.index, y=dow_avg.values,
+                marker_color=['#2ca02c' if d not in ['Saturday', 'Sunday'] else '#ff7f0e' 
+                             for d in dow_avg.index],
+                text=[f'{int(v)}' for v in dow_avg.values],
+                textposition='outside'
+            ))
+            fig3.update_layout(
+                title="Average Daily Volume by Day of Week",
+                xaxis_title="Day",
+                yaxis_title="Avg Call Volume",
+                height=350
+            )
+            st.plotly_chart(fig3, use_container_width=True)
+            
+            # Info box
+            st.info("""
+            **Short-Term Forecasting Methods (5-Day Horizon):**
+            - **Simple Exp. Smoothing**: Good for stable patterns
+            - **ARIMA(2,0,1)**: Captures short-term dynamics
+            - **Day-of-Week Average**: Uses historical day patterns
+            - **LSTM (Deep Learning)**: Recurrent neural network for sequential patterns
+            - **Neural Network (MLP)**: Feedforward network with lagged features and day-of-week encoding
+            - **Ensemble**: Combines all methods for robustness
+            """)
+            
         except Exception as e:
             st.error(f"Error in short-term forecasting: {str(e)}")
             st.exception(e)
