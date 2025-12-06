@@ -574,30 +574,35 @@ RECOMMENDATIONS:
         st.header(f"Multi-Model Forecast Comparison ({forecast_periods}-Week Horizon)")
         st.markdown(f"**Compare all forecasting models over the next {forecast_periods} weeks: SARIMAX, Holt-Winters, and Ensemble**")
         
-        # Model comparison metrics - show all 4 models
+        # Model comparison metrics - show all models dynamically
         st.subheader("Model Performance Summary")
         
         model_colors = {
             'sarimax_baseline': '#ff7f0e',  # Orange
             'sarimax_axiom': '#2ca02c',      # Green
             'holtwinters': '#9467bd',        # Purple
-            'ensemble': '#d62728'            # Red
+            'ensemble': '#d62728',           # Red
+            'lstm': '#8c564b',               # Brown
+            'nn': '#e377c2'                  # Pink
         }
         
-        # Metrics cards for each model
-        cols = st.columns(4)
-        for i, (key, data) in enumerate(all_model_forecasts.items()):
-            with cols[i]:
-                mape = data['metrics']['MAPE']
-                mae = data['metrics']['MAE']
-                accuracy = 100 - mape
-                st.metric(
-                    data['name'], 
-                    f"{accuracy:.1f}% accurate",
-                    delta=f"MAPE: {mape:.1f}%",
-                    delta_color="off"
-                )
-                st.caption(f"MAE: {mae:.0f} calls")
+        # Metrics cards for each model - create columns dynamically
+        num_models = len(all_model_forecasts)
+        if num_models > 0:
+            cols = st.columns(num_models)
+            for i, (key, data) in enumerate(all_model_forecasts.items()):
+                if i < len(cols):  # Safety check
+                    with cols[i]:
+                        mape = data['metrics']['MAPE']
+                        mae = data['metrics']['MAE']
+                        accuracy = 100 - mape
+                        st.metric(
+                            data['name'], 
+                            f"{accuracy:.1f}% accurate",
+                            delta=f"MAPE: {mape:.1f}%",
+                            delta_color="off"
+                        )
+                        st.caption(f"MAE: {mae:.0f} calls")
         
         st.markdown("---")
         
@@ -1257,7 +1262,9 @@ RECOMMENDATIONS:
             'sarimax_baseline': '#ff7f0e',
             'sarimax_axiom': '#2ca02c',
             'holtwinters': '#9467bd',
-            'ensemble': '#d62728'
+            'ensemble': '#d62728',
+            'lstm': '#8c564b',
+            'nn': '#e377c2'
         }
         
         # Performance metrics comparison table
@@ -1381,31 +1388,41 @@ RECOMMENDATIONS:
         # Residuals comparison
         st.subheader("Residuals Analysis by Model")
         
-        fig_resid = make_subplots(rows=2, cols=2, 
-                                   subplot_titles=[result['name'] for result in all_models.values()])
-        
-        positions = [(1,1), (1,2), (2,1), (2,2)]
-        for i, (key, result) in enumerate(all_models.items()):
-            eval_data = result['eval_df'].copy()
-            eval_data['residual'] = eval_data['y'] - eval_data['yhat']
-            row, col = positions[i]
+        num_models = len(all_models)
+        if num_models > 0:
+            # Calculate grid dimensions dynamically
+            cols_grid = min(2, num_models)
+            rows_grid = (num_models + cols_grid - 1) // cols_grid  # Ceiling division
             
-            fig_resid.add_trace(
-                go.Scatter(
-                    x=eval_data['ds'],
-                    y=eval_data['residual'],
-                    mode='lines+markers',
-                    name=result['name'],
-                    line=dict(color=model_colors.get(key, '#888'), width=1),
-                    marker=dict(size=4),
-                    showlegend=False
-                ),
-                row=row, col=col
+            fig_resid = make_subplots(
+                rows=rows_grid, 
+                cols=cols_grid, 
+                subplot_titles=[result['name'] for result in all_models.values()],
+                vertical_spacing=0.12
             )
-            fig_resid.add_hline(y=0, line_dash="dash", line_color="gray", row=row, col=col)
-        
-        fig_resid.update_layout(height=600, title_text="Residuals by Model (Actual - Predicted)")
-        st.plotly_chart(fig_resid, use_container_width=True)
+            
+            for i, (key, result) in enumerate(all_models.items()):
+                eval_data = result['eval_df'].copy()
+                eval_data['residual'] = eval_data['y'] - eval_data['yhat']
+                row = (i // cols_grid) + 1
+                col = (i % cols_grid) + 1
+                
+                fig_resid.add_trace(
+                    go.Scatter(
+                        x=eval_data['ds'],
+                        y=eval_data['residual'],
+                        mode='lines+markers',
+                        name=result['name'],
+                        line=dict(color=model_colors.get(key, '#888'), width=1),
+                        marker=dict(size=4),
+                        showlegend=False
+                    ),
+                    row=row, col=col
+                )
+                fig_resid.add_hline(y=0, line_dash="dash", line_color="gray", row=row, col=col)
+            
+            fig_resid.update_layout(height=600, title_text="Residuals by Model (Actual - Predicted)")
+            st.plotly_chart(fig_resid, use_container_width=True)
         
         # Model selection guidance
         st.markdown("---")
