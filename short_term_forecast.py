@@ -1,0 +1,322 @@
+"""
+Short-Term (Intraday/Daily) Forecasting Module
+
+Provides 5-day ahead forecasts for immediate staffing decisions.
+Uses different techniques optimized for short horizons:
+- Simple Exponential Smoothing
+- Moving Average with Day-of-Week patterns
+- ARIMA for short-term dynamics
+"""
+
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from statsmodels.tsa.holtwinters import SimpleExpSmoothing, ExponentialSmoothing
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import warnings
+warnings.filterwarnings('ignore')
+
+
+def generate_daily_data(weekly_df, days_back=90):
+    """
+    Convert weekly data to daily data with realistic intraday patterns.
+    
+    Daily patterns:
+    - Monday: High volume (weekend backlog)
+    - Tuesday-Wednesday: Peak days
+    - Thursday: Moderate
+    - Friday: Lower (weekend approaching)
+    - Saturday-Sunday: Low volume
+    """
+    np.random.seed(42)
+    
+    # Get the last date from weekly data
+    last_weekly_date = pd.to_datetime(weekly_df['ds'].max())
+    
+    # Generate daily dates for the past N days
+    end_date = last_weekly_date
+    start_date = end_date - timedelta(days=days_back)
+    daily_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    
+    # Day-of-week multipliers (0=Monday, 6=Sunday)
+    dow_multipliers = {
+        0: 1.15,  # Monday - high (backlog)
+        1: 1.20,  # Tuesday - peak
+        2: 1.18,  # Wednesday - peak
+        3: 1.05,  # Thursday - moderate
+        4: 0.90,  # Friday - lower
+        5: 0.35,  # Saturday - low
+        6: 0.25,  # Sunday - lowest
+    }
+    
+    # Get average weekly volume from recent weeks
+    recent_weekly_avg = weekly_df['y'].tail(13).mean()
+    daily_base = recent_weekly_avg / 5  # Approximate daily from weekly (5 working days equiv)
+    
+    # Generate daily volumes
+    daily_volumes = []
+    for date in daily_dates:
+        dow = date.dayofweek
+        multiplier = dow_multipliers[dow]
+        
+        # Add some trend (slight growth)
+        days_from_start = (date - start_date).days
+        trend_factor = 1 + (days_from_start / days_back) * 0.05
+        
+        # Add noise
+        noise = np.random.normal(0, daily_base * 0.12)
+        
+        volume = daily_base * multiplier * trend_factor + noise
+        volume = max(volume, 20)  # Minimum floor
+        daily_volumes.append(int(round(volume)))
+    
+    # Create daily dataframe
+    daily_df = pd.DataFrame({
+        'ds': daily_dates,
+        'y': daily_volumes,
+        'day_of_week': [d.dayofweek for d in daily_dates],
+        'day_name': [d.strftime('%A') for d in daily_dates],
+        'is_weekend': [d.dayofweek >= 5 for d in daily_dates]
+    })
+    
+    return daily_df
+
+
+class ShortTermForecaster:
+    """
+    Short-term forecaster for 1-5 day ahead predictions.
+    """
+    
+    def __init__(self, method='ensemble'):
+        """
+        Args:
+            method: 'ses' (Simple Exp Smoothing), 'arima', 'dow_avg', or 'ensemble'
+        """
+        self.method = method
+        self.training_data = None
+        self.dow_patterns = None
+        self.models = {}
+        
+    def fit(self, daily_df):
+        """Fit the short-term forecasting models."""
+        if not isinstance(daily_df, pd.DataFrame):
+            raise ValueError("Input must be a pandas DataFrame")
+        
+        df = daily_df.copy()
+        df['ds'] = pd.to_datetime(df['ds'])
+        df = df.sort_values('ds').reset_index(drop=True)
+        self.training_data = df.copy()
+        
+        y = np.array(df['y']).astype(float)
+        
+        # Learn day-of-week patterns
+        self.dow_patterns = df.groupby('day_of_week')['y'].mean().to_dict()
+        
+        # Fit Simple Exponential Smoothing
+        try:
+            ses_model = SimpleExpSmoothing(y).fit(smoothing_level=0.3, optimized=False)
+            self.models['ses'] = ses_model
+        except Exception:
+            self.models['ses'] = None
+        
+        # Fit ARIMA (short-term dynamics)
+        try:
+            arima_model = ARIMA(y, order=(2, 0, 1)).fit()
+            self.models['arima'] = arima_model
+        except Exception:
+            self.models['arima'] = None
+        
+        # Fit Holt-Winters with weekly seasonality
+        try:
+            if len(y) >= 14:  # Need at least 2 weeks
+                hw_model = ExponentialSmoothing(
+                    y, trend='add', seasonal='add', 
+                    seasonal_periods=7, damped_trend=True
+                ).fit()
+                self.models['hw'] = hw_model
+            else:
+                self.models['hw'] = None
+        except Exception:
+            self.models['hw'] = None
+        
+        return self
+    
+    def forecast(self, days=5):
+        """Generate forecast for next N days."""
+        if self.training_data is None:
+            raise ValueError("Model must be fitted first")
+        
+        last_date = self.training_data['ds'].max()
+        future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=days, freq='D')
+        
+        forecasts = {}
+        
+        # Day-of-week average forecast
+        dow_forecast = []
+        for date in future_dates:
+            dow = date.dayofweek
+            dow_forecast.append(self.dow_patterns.get(dow, self.training_data['y'].mean()))
+        forecasts['dow_avg'] = np.array(dow_forecast)
+        
+        # SES forecast
+        if self.models.get('ses'):
+            ses_forecast = self.models['ses'].forecast(days)
+            forecasts['ses'] = np.array(ses_forecast)
+        
+        # ARIMA forecast
+        if self.models.get('arima'):
+            arima_forecast = self.models['arima'].forecast(days)
+            forecasts['arima'] = np.array(arima_forecast)
+        
+        # Holt-Winters forecast
+        if self.models.get('hw'):
+            hw_forecast = self.models['hw'].forecast(days)
+            forecasts['hw'] = np.array(hw_forecast)
+        
+        # Ensemble: weighted average
+        available_forecasts = [f for f in [forecasts.get('ses'), forecasts.get('arima'), 
+                                           forecasts.get('hw'), forecasts.get('dow_avg')] 
+                             if f is not None]
+        
+        if available_forecasts:
+            ensemble_forecast = np.mean(available_forecasts, axis=0)
+        else:
+            ensemble_forecast = forecasts['dow_avg']
+        
+        forecasts['ensemble'] = ensemble_forecast
+        
+        # Select method
+        if self.method in forecasts:
+            predicted = forecasts[self.method]
+        else:
+            predicted = forecasts['ensemble']
+        
+        # Confidence intervals (based on recent volatility)
+        recent_std = self.training_data['y'].tail(14).std()
+        ci_width = 1.96 * recent_std * np.sqrt(1 + np.arange(days) * 0.1)
+        
+        result_df = pd.DataFrame({
+            'ds': future_dates,
+            'yhat': np.maximum(predicted, 10).round(0).astype(int),
+            'yhat_lower': np.maximum(predicted - ci_width, 5).round(0).astype(int),
+            'yhat_upper': np.maximum(predicted + ci_width, predicted).round(0).astype(int),
+            'day_name': [d.strftime('%A') for d in future_dates],
+            'day_of_week': [d.dayofweek for d in future_dates]
+        })
+        
+        # Store all model forecasts for comparison
+        result_df['ses_forecast'] = forecasts.get('ses', forecasts['dow_avg']).round(0).astype(int) if 'ses' in forecasts else None
+        result_df['arima_forecast'] = forecasts.get('arima', forecasts['dow_avg']).round(0).astype(int) if 'arima' in forecasts else None
+        result_df['hw_forecast'] = forecasts.get('hw', forecasts['dow_avg']).round(0).astype(int) if 'hw' in forecasts else None
+        result_df['dow_forecast'] = forecasts['dow_avg'].round(0).astype(int)
+        
+        return result_df
+    
+    def evaluate(self, test_df):
+        """Evaluate on test data."""
+        if not isinstance(test_df, pd.DataFrame):
+            raise ValueError("Input must be a pandas DataFrame")
+        
+        test_df = test_df.copy()
+        n_test = len(test_df)
+        
+        # Get forecasts
+        forecast = self.forecast(days=n_test)
+        
+        actual = np.array(test_df['y'])
+        predicted = np.array(forecast['yhat'])
+        
+        min_len = min(len(actual), len(predicted))
+        actual = actual[:min_len]
+        predicted = predicted[:min_len]
+        
+        mae = mean_absolute_error(actual, predicted)
+        rmse = np.sqrt(mean_squared_error(actual, predicted))
+        mape = np.mean(np.abs((actual - predicted) / np.maximum(actual, 1))) * 100
+        
+        # Within CI
+        yhat_lower = np.array(forecast['yhat_lower'])[:min_len]
+        yhat_upper = np.array(forecast['yhat_upper'])[:min_len]
+        within_ci = np.mean((actual >= yhat_lower) & (actual <= yhat_upper)) * 100
+        
+        metrics = {
+            'MAE': mae,
+            'RMSE': rmse,
+            'MAPE': mape,
+            'Within_CI_%': within_ci,
+            'n_days': min_len
+        }
+        
+        eval_df = forecast.iloc[:min_len].copy()
+        eval_df['y'] = actual
+        
+        return metrics, eval_df
+
+
+def compare_short_term_models(daily_df, test_days=5):
+    """Compare all short-term forecasting methods."""
+    
+    # Split into train/test
+    train_df = daily_df.iloc[:-test_days].copy()
+    test_df = daily_df.iloc[-test_days:].copy()
+    
+    results = {}
+    methods = ['ses', 'arima', 'dow_avg', 'ensemble']
+    
+    for method in methods:
+        try:
+            model = ShortTermForecaster(method=method)
+            model.fit(train_df)
+            metrics, eval_df = model.evaluate(test_df)
+            forecast = model.forecast(days=5)
+            
+            results[method] = {
+                'model': model,
+                'metrics': metrics,
+                'eval_df': eval_df,
+                'forecast': forecast,
+                'name': {
+                    'ses': 'Simple Exp. Smoothing',
+                    'arima': 'ARIMA(2,0,1)',
+                    'dow_avg': 'Day-of-Week Average',
+                    'ensemble': 'Ensemble'
+                }[method]
+            }
+        except Exception as e:
+            print(f"Method {method} failed: {e}")
+    
+    return results, train_df, test_df
+
+
+def get_staffing_recommendation(forecast_df, calls_per_agent_hour=8, hours_per_shift=8):
+    """Convert daily forecast to staffing recommendations."""
+    
+    recommendations = []
+    for _, row in forecast_df.iterrows():
+        daily_calls = row['yhat']
+        
+        # Assume 10-hour operating day
+        operating_hours = 10
+        calls_per_hour = daily_calls / operating_hours
+        
+        # Agents needed per hour
+        agents_per_hour = calls_per_hour / calls_per_agent_hour
+        
+        # Peak factor (20% buffer)
+        peak_agents = int(np.ceil(agents_per_hour * 1.2))
+        
+        # FTE calculation
+        fte_needed = (daily_calls / calls_per_agent_hour) / hours_per_shift
+        
+        recommendations.append({
+            'date': row['ds'],
+            'day': row['day_name'],
+            'forecast_calls': int(row['yhat']),
+            'agents_needed': peak_agents,
+            'fte_needed': round(fte_needed, 1),
+            'confidence': f"{int(row['yhat_lower'])} - {int(row['yhat_upper'])}"
+        })
+    
+    return pd.DataFrame(recommendations)
+
