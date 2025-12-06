@@ -1414,15 +1414,20 @@ RECOMMENDATIONS:
         | **Robust & Balanced** | Ensemble |
         """)
     
-    # Footer with SharkNinja branding
+    # Footer with author attribution
     st.markdown("---")
     st.markdown(f"""
     <div style='text-align: center; color: {DARK_GRAY}; padding: 20px;'>
         <p style='font-size: 1.1rem; font-weight: bold;'>SharkNinja Customer Support Forecasting</p>
         <p>Powered by <span style='color: {SHARK_TEAL};'>Axiom Ray AI</span> | Predictive Workforce Analytics</p>
-        <p style='font-size: 0.9rem; color: gray;'>Demo for illustration purposes | Data is synthetic</p>
-        <p style='font-size: 0.8rem; color: gray; margin-top: 10px;'>
-            Supporting Shark (vacuums, hair care, air purifiers) & Ninja (blenders, air fryers, coffee makers, grills)
+        <p style='font-size: 0.95rem; color: {DARK_GRAY}; margin-top: 15px;'>
+            <strong>Author:</strong> Daniel Bourdeau
+        </p>
+        <p style='font-size: 0.9rem; color: gray;'>
+            For SharkNinja CS Forecasting Analyst Interview
+        </p>
+        <p style='font-size: 0.85rem; color: gray; font-style: italic;'>
+            For demonstration purposes only | Synthetic data
         </p>
     </div>
     """, unsafe_allow_html=True)
