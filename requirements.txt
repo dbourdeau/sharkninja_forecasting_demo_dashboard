@@ -4,4 +4,5 @@ statsmodels>=0.14.0
 streamlit>=1.28.0
 plotly>=5.15.0
 scikit-learn>=1.3.0
+# TensorFlow for LSTM/Neural Network models (optional - code gracefully handles if unavailable)
 tensorflow>=2.13.0
