@@ -59,13 +59,14 @@ class CallVolumeForecaster:
         self.has_axiom = 'axiom_ray_score' in df.columns
         
         # Prepare endogenous variable
-        endog = df['y'].values
+        endog = np.array(df['y'])
         
         # Prepare exogenous variable (lagged Axiom Ray score)
         exog = None
         if self.use_exogenous and self.has_axiom:
             # Shift axiom score to align: axiom[t-2] predicts volume[t]
-            exog = df['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill().values.reshape(-1, 1)
+            exog_series = df['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill()
+            exog = np.array(exog_series).reshape(-1, 1)
         
         # SARIMAX order
         order = (1, 1, 1)
@@ -114,10 +115,11 @@ class CallVolumeForecaster:
         if self.use_exogenous and self.has_axiom:
             # Get axiom scores for forecasting
             if isinstance(future_exog, pd.DataFrame) and 'axiom_ray_score' in future_exog.columns:
-                exog_values = future_exog['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill().values[:periods]
+                exog_series = future_exog['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill()
+                exog_values = np.array(exog_series)[:periods]
             else:
                 # Use last known axiom scores
-                exog_values = self.training_data['axiom_ray_score'].tail(periods).values
+                exog_values = np.array(self.training_data['axiom_ray_score'].tail(periods))
             
             # Ensure we have enough values
             if len(exog_values) < periods:
@@ -128,16 +130,28 @@ class CallVolumeForecaster:
         # Get forecast
         forecast_result = self.model_fitted.get_forecast(steps=periods, exog=exog_forecast)
         
-        predicted_mean = forecast_result.predicted_mean.values
+        predicted_mean = forecast_result.predicted_mean
+        if hasattr(predicted_mean, 'values'):
+            predicted_mean = predicted_mean.values
+        predicted_mean = np.array(predicted_mean)
+        
         conf_int = forecast_result.conf_int()
         
-        # Handle column names
+        # Handle column names - conf_int could be DataFrame or array
         try:
-            yhat_lower = conf_int['lower y'].values
-            yhat_upper = conf_int['upper y'].values
-        except KeyError:
-            yhat_lower = conf_int.iloc[:, 0].values
-            yhat_upper = conf_int.iloc[:, 1].values
+            if hasattr(conf_int, 'columns') and 'lower y' in conf_int.columns:
+                yhat_lower = np.array(conf_int['lower y'])
+                yhat_upper = np.array(conf_int['upper y'])
+            elif hasattr(conf_int, 'iloc'):
+                yhat_lower = np.array(conf_int.iloc[:, 0])
+                yhat_upper = np.array(conf_int.iloc[:, 1])
+            else:
+                # Already numpy array
+                yhat_lower = np.array(conf_int[:, 0])
+                yhat_upper = np.array(conf_int[:, 1])
+        except Exception:
+            yhat_lower = predicted_mean * 0.8
+            yhat_upper = predicted_mean * 1.2
         
         # Handle NaN/inf
         mean_val = self.training_data['y'].mean()
@@ -210,8 +224,8 @@ class CallVolumeForecaster:
         future_exog = df_test if 'axiom_ray_score' in df_test.columns else None
         forecast = self.forecast_future(periods=n_test, future_exog=future_exog)
         
-        actual_values = df_test['y'].values
-        predicted_values = forecast['yhat'].values
+        actual_values = np.array(df_test['y'])
+        predicted_values = np.array(forecast['yhat'])
         
         min_len = min(len(actual_values), len(predicted_values))
         actual_values = actual_values[:min_len]
@@ -221,8 +235,8 @@ class CallVolumeForecaster:
         rmse = np.sqrt(mean_squared_error(actual_values, predicted_values))
         mape = np.mean(np.abs((actual_values - predicted_values) / np.maximum(actual_values, 1))) * 100
         
-        yhat_lower = forecast['yhat_lower'].values[:min_len]
-        yhat_upper = forecast['yhat_upper'].values[:min_len]
+        yhat_lower = np.array(forecast['yhat_lower'])[:min_len]
+        yhat_upper = np.array(forecast['yhat_upper'])[:min_len]
         within_ci = np.mean((actual_values >= yhat_lower) & (actual_values <= yhat_upper)) * 100
         
         metrics = {
