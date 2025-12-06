@@ -980,38 +980,157 @@ RECOMMENDATIONS:
     
     with tab6:
         st.header("Axiom Ray AI Analysis")
-        st.markdown("**Early Warning System** - Axiom Ray AI monitors social media, warranty claims, and retail partner feedback to predict support volume 2 weeks ahead.")
+        st.markdown("**Early Warning System** - Axiom Ray AI aggregates multiple data signals to predict support volume surges before they happen.")
         
-        if 'axiom_ray_score' in df.columns:
-            fig, correlation = plot_axiom_ray_correlation(df)
+        # Check if we have Axiom Ray data
+        has_axiom = 'axiom_ray_score' in df.columns
+        
+        if has_axiom:
+            # Main correlation analysis
+            correlation = df['y'].corr(df['axiom_ray_score'])
+            
+            # Key metrics row
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Signal-Volume Correlation", f"{correlation:.2f}", 
+                         delta="Strong positive" if correlation > 0.5 else "Moderate")
+            with col2:
+                st.metric("Avg Signal Score", f"{df['axiom_ray_score'].mean():.0f}/100")
+            with col3:
+                recent_score = df['axiom_ray_score'].tail(4).mean()
+                historical_avg = df['axiom_ray_score'].mean()
+                st.metric("Current Signal", f"{recent_score:.0f}", 
+                         delta=f"{recent_score - historical_avg:+.0f} vs avg")
+            with col4:
+                # R-squared
+                r_squared = correlation ** 2
+                st.metric("Predictive Power (R²)", f"{r_squared:.1%}")
+            
+            st.markdown("---")
+            
+            # Dual-axis time series chart
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            fig.add_trace(
+                go.Scatter(x=df['ds'], y=df['y'], name='Call Volume', 
+                          line=dict(color='#1f77b4', width=2)),
+                secondary_y=False
+            )
+            
+            fig.add_trace(
+                go.Scatter(x=df['ds'], y=df['axiom_ray_score'], name='Axiom Ray Score', 
+                          line=dict(color='#d62728', width=2)),
+                secondary_y=True
+            )
+            
+            fig.update_layout(
+                title="Axiom Ray Signal vs Actual Call Volume",
+                height=400,
+                hovermode='x unified'
+            )
+            fig.update_yaxes(title_text="Call Volume", secondary_y=False)
+            fig.update_yaxes(title_text="Axiom Ray Score (0-100)", secondary_y=True)
+            
             st.plotly_chart(fig, use_container_width=True)
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Correlation Coefficient", f"{correlation:.3f}")
-            with col2:
-                st.metric("Avg Axiom Ray Score", f"{df['axiom_ray_score'].mean():.1f}")
-            with col3:
-                st.metric("Score Range", f"{df['axiom_ray_score'].min()}-{df['axiom_ray_score'].max()}")
-        else:
-            st.info("Axiom Ray integration is available as a premium feature. Contact your account manager for access.")
+            # Signal components breakdown
+            st.subheader("Signal Component Analysis")
             
-            # Show placeholder metrics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Expected Correlation", "0.70+")
-            with col2:
-                st.metric("Prediction Lead Time", "2 weeks")
-            with col3:
-                st.metric("Data Sources", "5+")
+            signal_cols = ['social_sentiment', 'review_trend', 'warranty_claims', 'search_trends', 'retail_alerts']
+            available_signals = [c for c in signal_cols if c in df.columns]
+            
+            if available_signals:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Component correlations
+                    st.markdown("**Individual Signal Correlations with Volume:**")
+                    signal_corrs = {}
+                    for sig in available_signals:
+                        corr = df['y'].corr(df[sig])
+                        signal_corrs[sig] = corr
+                    
+                    signal_df = pd.DataFrame({
+                        'Signal': [s.replace('_', ' ').title() for s in signal_corrs.keys()],
+                        'Correlation': list(signal_corrs.values()),
+                        'Strength': ['Strong' if abs(c) > 0.5 else 'Moderate' if abs(c) > 0.3 else 'Weak' 
+                                    for c in signal_corrs.values()]
+                    })
+                    st.dataframe(signal_df, use_container_width=True, hide_index=True)
+                
+                with col2:
+                    # Current signal levels
+                    st.markdown("**Current Signal Levels (Last 4 Weeks Avg):**")
+                    current_signals = {s.replace('_', ' ').title(): df[s].tail(4).mean() 
+                                      for s in available_signals}
+                    
+                    fig_bar = go.Figure(go.Bar(
+                        x=list(current_signals.values()),
+                        y=list(current_signals.keys()),
+                        orientation='h',
+                        marker_color=['#ff6b6b' if v > 60 else '#ffd93d' if v > 40 else '#6bcb77' 
+                                     for v in current_signals.values()]
+                    ))
+                    fig_bar.update_layout(
+                        height=250,
+                        xaxis_title="Score (0-100)",
+                        margin=dict(l=0, r=0, t=10, b=0)
+                    )
+                    st.plotly_chart(fig_bar, use_container_width=True)
+            
+            # Scatter plot with regression
+            st.subheader("Correlation Analysis")
+            fig_scatter = go.Figure()
+            
+            fig_scatter.add_trace(go.Scatter(
+                x=df['axiom_ray_score'],
+                y=df['y'],
+                mode='markers',
+                name='Weekly Data Points',
+                marker=dict(color='#1f77b4', size=8, opacity=0.6)
+            ))
+            
+            # Add trend line
+            z = np.polyfit(df['axiom_ray_score'], df['y'], 1)
+            p = np.poly1d(z)
+            x_line = np.linspace(df['axiom_ray_score'].min(), df['axiom_ray_score'].max(), 100)
+            fig_scatter.add_trace(go.Scatter(
+                x=x_line,
+                y=p(x_line),
+                mode='lines',
+                name=f'Trend (r={correlation:.2f})',
+                line=dict(color='#d62728', width=2, dash='dash')
+            ))
+            
+            fig_scatter.update_layout(
+                title="Axiom Ray Score vs Call Volume (Weekly)",
+                xaxis_title="Axiom Ray Score",
+                yaxis_title="Call Volume",
+                height=400
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+            
+        else:
+            # Generate synthetic Axiom Ray data for display
+            st.warning("Axiom Ray data not found in dataset. Regenerate data to include Axiom Ray signals.")
         
+        st.markdown("---")
         st.markdown("""
         **How Axiom Ray Works for SharkNinja:**
-        - Monitors social media mentions of Shark vacuums and Ninja appliances
-        - Tracks warranty claim patterns and replacement part orders
-        - Analyzes Amazon/retail partner review sentiment
-        - Detects emerging issues (firmware bugs, defect patterns) before they spike
-        - Provides 2-week advance notice for staffing adjustments
+        
+        | Data Source | What It Monitors | Lead Time |
+        |-------------|------------------|-----------|
+        | Social Sentiment | Twitter, Reddit, Facebook mentions | 1-2 weeks |
+        | Review Trends | Amazon, Best Buy, Target reviews | 1-3 weeks |
+        | Warranty Claims | Return rates, replacement requests | 2-4 weeks |
+        | Search Trends | Google searches for product issues | 1-2 weeks |
+        | Retail Alerts | Partner feedback, inventory returns | 1-2 weeks |
+        
+        **Key Benefits:**
+        - Proactive staffing adjustments before volume spikes
+        - Early detection of product quality issues
+        - Reduced overtime costs through better planning
+        - Improved customer satisfaction via faster response
         """)
     
     with tab7:
