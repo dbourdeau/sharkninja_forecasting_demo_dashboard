@@ -50,12 +50,18 @@ class CallVolumeForecaster:
         - axiom_score[t] predicts volume[t+2]
         - So for volume[t], we use axiom_score[t-2]
         """
-        if not self.use_exogenous or 'axiom_ray_score' not in df.columns:
+        if not self.use_exogenous:
+            return None
+        
+        # Check if df is a DataFrame with the required column
+        if not isinstance(df, pd.DataFrame):
+            return None
+        if 'axiom_ray_score' not in df.columns:
             return None
         
         # Shift axiom score forward by LEAD_WEEKS to align with volume
         # axiom_score[t-2] → volume[t]
-        exog = df['axiom_ray_score'].shift(self.LEAD_WEEKS).fillna(method='bfill')
+        exog = df['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill()
         return exog.values.reshape(-1, 1)
     
     def fit(self, df, changepoint_prior_scale=0.05, seasonality_prior_scale=10, verbose=False):
@@ -133,15 +139,24 @@ class CallVolumeForecaster:
         
         # Prepare exogenous for forecast
         exog_forecast = None
-        if self.use_exogenous and 'axiom_ray_score' in self.training_data.columns:
-            if future_exog is not None and 'axiom_ray_score' in future_exog.columns:
+        has_training_axiom = isinstance(self.training_data, pd.DataFrame) and 'axiom_ray_score' in self.training_data.columns
+        
+        if self.use_exogenous and has_training_axiom:
+            has_future_axiom = isinstance(future_exog, pd.DataFrame) and 'axiom_ray_score' in future_exog.columns
+            
+            if has_future_axiom:
                 # Use provided future axiom scores (shifted by lead time)
-                exog_forecast = future_exog['axiom_ray_score'].shift(self.LEAD_WEEKS).fillna(method='bfill').values[:periods]
+                exog_forecast = future_exog['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill().values[:periods]
             else:
                 # Use last known axiom scores (they predict 2 weeks ahead!)
                 # So the last LEAD_WEEKS axiom scores predict the first LEAD_WEEKS future volumes
                 last_axiom_scores = self.training_data['axiom_ray_score'].tail(self.LEAD_WEEKS + periods).values
                 exog_forecast = last_axiom_scores[:periods]
+            
+            # Ensure we have enough values
+            if len(exog_forecast) < periods:
+                # Pad with last value
+                exog_forecast = np.pad(exog_forecast, (0, periods - len(exog_forecast)), mode='edge')
             
             exog_forecast = exog_forecast.reshape(-1, 1)
         
