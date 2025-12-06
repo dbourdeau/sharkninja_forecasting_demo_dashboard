@@ -1,13 +1,16 @@
 """
-Multi-Model Forecasting with Ensemble Methods
+Robust Multi-Model Forecasting with Trend and Seasonality
 
 Models available:
 1. SARIMAX with Axiom Ray as exogenous leading indicator
 2. Holt-Winters Triple Exponential Smoothing (trend + seasonality)
-3. Ensemble: Weighted average of SARIMAX and Holt-Winters
+3. Ensemble: Weighted average with trend continuation
 
-Axiom Ray is a 2-week LEADING indicator for SARIMAX:
-- axiom_score[t] predicts volume[t+2]
+Key improvements for robust forecasting:
+- Explicit trend detection and projection
+- Multiple seasonal period testing
+- Automatic model selection based on fit
+- Trend-adjusted ensemble weighting
 """
 
 import pandas as pd
@@ -15,12 +18,30 @@ import numpy as np
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.linear_model import LinearRegression
 import warnings
 warnings.filterwarnings('ignore')
 
 
+def detect_trend(y, return_slope=False):
+    """Detect linear trend in the series."""
+    t = np.arange(len(y)).reshape(-1, 1)
+    model = LinearRegression()
+    model.fit(t, y)
+    trend_line = model.predict(t)
+    if return_slope:
+        return trend_line, model.coef_[0], model.intercept_
+    return trend_line
+
+
+def project_trend(slope, intercept, n_train, n_forecast):
+    """Project trend into the future."""
+    t_future = np.arange(n_train, n_train + n_forecast)
+    return intercept + slope * t_future
+
+
 class SARIMAXForecaster:
-    """SARIMAX model with optional Axiom Ray exogenous variable."""
+    """SARIMAX model with optional Axiom Ray exogenous variable and robust trend handling."""
     
     LEAD_WEEKS = 2
     
@@ -31,6 +52,8 @@ class SARIMAXForecaster:
         self.training_data = None
         self.last_train_date = None
         self.has_axiom = False
+        self.trend_slope = 0
+        self.trend_intercept = 0
         self.name = "SARIMAX" + (" + Axiom Ray" if use_exogenous else "")
         
     def fit(self, df):
@@ -46,31 +69,64 @@ class SARIMAXForecaster:
         self.last_train_date = df['ds'].max()
         self.has_axiom = 'axiom_ray_score' in df.columns
         
-        endog = np.array(df['y'])
+        y = np.array(df['y'])
+        n = len(y)
+        
+        # Detect trend for later projection
+        _, self.trend_slope, self.trend_intercept = detect_trend(y, return_slope=True)
+        
+        endog = y
         
         exog = None
         if self.use_exogenous and self.has_axiom:
             exog_series = df['axiom_ray_score'].shift(self.LEAD_WEEKS).ffill().bfill()
             exog = np.array(exog_series).reshape(-1, 1)
         
-        order = (1, 1, 1)
-        seasonal_order = (1, 0, 1, 13)
+        # Try multiple seasonal orders and pick the best
+        best_aic = np.inf
+        best_model = None
         
-        try:
-            self.model = SARIMAX(endog=endog, exog=exog, order=order,
-                                seasonal_order=seasonal_order,
-                                enforce_stationarity=False, enforce_invertibility=False)
-            self.model_fitted = self.model.fit(disp=False, maxiter=100)
-        except Exception:
+        # Seasonal orders to try: quarterly (13 weeks) and annual (52 weeks approx)
+        configs = [
+            ((1, 1, 1), (1, 1, 1, 13)),  # Quarterly seasonality
+            ((1, 1, 1), (1, 0, 1, 13)),  # Quarterly, no seasonal differencing
+            ((2, 1, 2), (1, 0, 1, 13)),  # More complex ARIMA
+            ((1, 1, 1), (0, 0, 0, 0)),   # No seasonality fallback
+        ]
+        
+        for order, seasonal_order in configs:
+            try:
+                model = SARIMAX(
+                    endog=endog,
+                    exog=exog,
+                    order=order,
+                    seasonal_order=seasonal_order,
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                    trend='t'  # Include trend in the model
+                )
+                fitted = model.fit(disp=False, maxiter=200)
+                if fitted.aic < best_aic:
+                    best_aic = fitted.aic
+                    best_model = fitted
+                    self.model = model
+            except Exception:
+                continue
+        
+        if best_model is None:
+            # Ultimate fallback - simple model
             self.model = SARIMAX(endog=endog, exog=exog, order=(1, 1, 1),
                                 enforce_stationarity=False, enforce_invertibility=False)
-            self.model_fitted = self.model.fit(disp=False, maxiter=50)
+            best_model = self.model.fit(disp=False, maxiter=50)
         
+        self.model_fitted = best_model
         return self
     
     def forecast(self, periods, future_exog=None):
         if self.model_fitted is None:
             raise ValueError("Model must be fitted first")
+        
+        n_train = len(self.training_data)
         
         future_dates = pd.date_range(
             start=self.last_train_date + pd.Timedelta(days=7),
@@ -108,13 +164,24 @@ class SARIMAXForecaster:
                 yhat_lower = np.array(conf_int[:, 0])
                 yhat_upper = np.array(conf_int[:, 1])
         except Exception:
-            yhat_lower = predicted_mean * 0.8
-            yhat_upper = predicted_mean * 1.2
+            yhat_lower = predicted_mean * 0.85
+            yhat_upper = predicted_mean * 1.15
+        
+        # If forecast is too flat, blend with trend projection
+        forecast_range = np.max(predicted_mean) - np.min(predicted_mean)
+        historical_range = np.max(self.training_data['y']) - np.min(self.training_data['y'])
+        
+        if forecast_range < 0.1 * historical_range:
+            # Forecast is suspiciously flat - add trend component
+            trend_projection = project_trend(self.trend_slope, self.trend_intercept, n_train, periods)
+            last_actual = self.training_data['y'].iloc[-1]
+            trend_adjustment = trend_projection - trend_projection[0] + last_actual
+            predicted_mean = 0.5 * predicted_mean + 0.5 * trend_adjustment
         
         mean_val = self.training_data['y'].mean()
         predicted_mean = np.nan_to_num(predicted_mean, nan=mean_val)
-        yhat_lower = np.nan_to_num(yhat_lower, nan=predicted_mean * 0.8)
-        yhat_upper = np.nan_to_num(yhat_upper, nan=predicted_mean * 1.2)
+        yhat_lower = np.nan_to_num(yhat_lower, nan=predicted_mean * 0.85)
+        yhat_upper = np.nan_to_num(yhat_upper, nan=predicted_mean * 1.15)
         
         predicted_mean = np.maximum(predicted_mean, 100)
         yhat_lower = np.maximum(yhat_lower, 50)
@@ -129,13 +196,15 @@ class SARIMAXForecaster:
 
 
 class HoltWintersForecaster:
-    """Holt-Winters Triple Exponential Smoothing (trend + seasonality)."""
+    """Holt-Winters Triple Exponential Smoothing with automatic model selection."""
     
     def __init__(self):
         self.model = None
         self.model_fitted = None
         self.training_data = None
         self.last_train_date = None
+        self.trend_slope = 0
+        self.trend_intercept = 0
         self.name = "Holt-Winters"
         
     def fit(self, df):
@@ -150,30 +219,55 @@ class HoltWintersForecaster:
         self.training_data = df.copy()
         self.last_train_date = df['ds'].max()
         
-        endog = np.array(df['y'])
+        y = np.array(df['y'])
+        n = len(y)
         
-        # Determine seasonal period (quarterly = 13 weeks)
-        seasonal_periods = min(13, len(endog) // 3)
+        # Detect trend for backup
+        _, self.trend_slope, self.trend_intercept = detect_trend(y, return_slope=True)
         
-        try:
-            self.model = ExponentialSmoothing(
-                endog,
-                trend='add',
-                seasonal='add',
-                seasonal_periods=seasonal_periods,
-                damped_trend=True
-            )
-            self.model_fitted = self.model.fit(optimized=True)
-        except Exception:
-            # Fallback to simpler model
-            self.model = ExponentialSmoothing(endog, trend='add', damped_trend=True)
-            self.model_fitted = self.model.fit(optimized=True)
+        # Try multiple configurations
+        best_aic = np.inf
+        best_model = None
         
+        seasonal_periods = [13, 26] if n >= 52 else [13]
+        
+        configs = []
+        for sp in seasonal_periods:
+            if n >= 2 * sp:
+                configs.extend([
+                    {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': sp, 'damped_trend': True},
+                    {'trend': 'add', 'seasonal': 'add', 'seasonal_periods': sp, 'damped_trend': False},
+                    {'trend': 'add', 'seasonal': 'mul', 'seasonal_periods': sp, 'damped_trend': True},
+                ])
+        
+        # Fallback configs without seasonality
+        configs.append({'trend': 'add', 'seasonal': None, 'damped_trend': True})
+        configs.append({'trend': 'add', 'seasonal': None, 'damped_trend': False})
+        
+        for config in configs:
+            try:
+                model = ExponentialSmoothing(y, **config)
+                fitted = model.fit(optimized=True)
+                if fitted.aic < best_aic:
+                    best_aic = fitted.aic
+                    best_model = fitted
+                    self.model = model
+            except Exception:
+                continue
+        
+        if best_model is None:
+            # Ultimate fallback
+            self.model = ExponentialSmoothing(y, trend='add', damped_trend=True)
+            best_model = self.model.fit(optimized=True)
+        
+        self.model_fitted = best_model
         return self
     
     def forecast(self, periods, future_exog=None):
         if self.model_fitted is None:
             raise ValueError("Model must be fitted first")
+        
+        n_train = len(self.training_data)
         
         future_dates = pd.date_range(
             start=self.last_train_date + pd.Timedelta(days=7),
@@ -183,18 +277,30 @@ class HoltWintersForecaster:
         forecast_result = self.model_fitted.forecast(periods)
         predicted_mean = np.array(forecast_result)
         
-        # Estimate confidence intervals from residuals
+        # Check if forecast is too flat
+        forecast_range = np.max(predicted_mean) - np.min(predicted_mean)
+        historical_range = np.max(self.training_data['y']) - np.min(self.training_data['y'])
+        
+        if forecast_range < 0.1 * historical_range:
+            # Add trend continuation
+            trend_projection = project_trend(self.trend_slope, self.trend_intercept, n_train, periods)
+            last_actual = self.training_data['y'].iloc[-1]
+            trend_adjustment = trend_projection - trend_projection[0] + last_actual
+            predicted_mean = 0.5 * predicted_mean + 0.5 * trend_adjustment
+        
+        # Confidence intervals from residuals
         residuals = self.model_fitted.resid
         std_resid = np.std(residuals) if len(residuals) > 0 else 50
         
-        yhat_lower = predicted_mean - 1.96 * std_resid
-        yhat_upper = predicted_mean + 1.96 * std_resid
+        # Widen CI as we go further out
+        ci_multiplier = 1.96 * np.sqrt(1 + np.arange(periods) * 0.05)
+        yhat_lower = predicted_mean - ci_multiplier * std_resid
+        yhat_upper = predicted_mean + ci_multiplier * std_resid
         
-        # Handle NaN/inf
         mean_val = self.training_data['y'].mean()
         predicted_mean = np.nan_to_num(predicted_mean, nan=mean_val)
-        yhat_lower = np.nan_to_num(yhat_lower, nan=predicted_mean * 0.8)
-        yhat_upper = np.nan_to_num(yhat_upper, nan=predicted_mean * 1.2)
+        yhat_lower = np.nan_to_num(yhat_lower, nan=predicted_mean * 0.85)
+        yhat_upper = np.nan_to_num(yhat_upper, nan=predicted_mean * 1.15)
         
         predicted_mean = np.maximum(predicted_mean, 100)
         yhat_lower = np.maximum(yhat_lower, 50)
@@ -209,19 +315,16 @@ class HoltWintersForecaster:
 
 
 class EnsembleForecaster:
-    """Ensemble of SARIMAX + Axiom Ray and Holt-Winters models."""
+    """Smart ensemble that combines models based on their strengths."""
     
     def __init__(self, weights=None):
-        """
-        Args:
-            weights: Dict with model weights, e.g. {'sarimax': 0.6, 'holtwinters': 0.4}
-                    If None, weights are determined by validation performance.
-        """
         self.sarimax = SARIMAXForecaster(use_exogenous=True)
         self.holtwinters = HoltWintersForecaster()
         self.weights = weights or {'sarimax': 0.5, 'holtwinters': 0.5}
         self.training_data = None
         self.last_train_date = None
+        self.trend_slope = 0
+        self.trend_intercept = 0
         self.name = "Ensemble (SARIMAX + Holt-Winters)"
         self.model_performance = {}
         
@@ -237,62 +340,50 @@ class EnsembleForecaster:
         self.training_data = df.copy()
         self.last_train_date = df['ds'].max()
         
+        y = np.array(df['y'])
+        _, self.trend_slope, self.trend_intercept = detect_trend(y, return_slope=True)
+        
         # Fit both models
         self.sarimax.fit(df)
         self.holtwinters.fit(df)
         
-        # Determine optimal weights using cross-validation on last 20% of data
+        # Cross-validation to determine weights
         n = len(df)
-        val_size = max(4, int(n * 0.2))
+        val_size = max(4, int(n * 0.15))
         train_cv = df.iloc[:-val_size].copy()
         val_cv = df.iloc[-val_size:].copy()
         
-        # Refit on CV training data
-        sarimax_cv = SARIMAXForecaster(use_exogenous=True)
-        holtwinters_cv = HoltWintersForecaster()
+        sarimax_mape = 50
+        hw_mape = 50
         
         try:
+            sarimax_cv = SARIMAXForecaster(use_exogenous=True)
             sarimax_cv.fit(train_cv)
-            hw_cv_fitted = True
+            sarimax_pred = sarimax_cv.forecast(val_size, future_exog=val_cv)
+            actual = np.array(val_cv['y'])
+            sarimax_mape = np.mean(np.abs((actual - np.array(sarimax_pred['yhat'])) / np.maximum(actual, 1))) * 100
         except Exception:
-            hw_cv_fitted = False
+            pass
         
         try:
-            holtwinters_cv.fit(train_cv)
-            sarimax_cv_fitted = True
+            hw_cv = HoltWintersForecaster()
+            hw_cv.fit(train_cv)
+            hw_pred = hw_cv.forecast(val_size)
+            actual = np.array(val_cv['y'])
+            hw_mape = np.mean(np.abs((actual - np.array(hw_pred['yhat'])) / np.maximum(actual, 1))) * 100
         except Exception:
-            sarimax_cv_fitted = False
-        
-        # Get CV predictions
-        actual = np.array(val_cv['y'])
-        
-        sarimax_mape = 100
-        hw_mape = 100
-        
-        if hw_cv_fitted:
-            try:
-                sarimax_pred = sarimax_cv.forecast(val_size, future_exog=val_cv)
-                sarimax_mape = np.mean(np.abs((actual - np.array(sarimax_pred['yhat'])) / np.maximum(actual, 1))) * 100
-            except Exception:
-                pass
-        
-        if sarimax_cv_fitted:
-            try:
-                hw_pred = holtwinters_cv.forecast(val_size)
-                hw_mape = np.mean(np.abs((actual - np.array(hw_pred['yhat'])) / np.maximum(actual, 1))) * 100
-            except Exception:
-                pass
+            pass
         
         self.model_performance = {
             'sarimax_mape': sarimax_mape,
             'holtwinters_mape': hw_mape
         }
         
-        # Set weights inversely proportional to error
-        total_inv_error = (1 / max(sarimax_mape, 0.1)) + (1 / max(hw_mape, 0.1))
+        # Weights inversely proportional to error
+        total_inv_error = (1 / max(sarimax_mape, 1)) + (1 / max(hw_mape, 1))
         self.weights = {
-            'sarimax': (1 / max(sarimax_mape, 0.1)) / total_inv_error,
-            'holtwinters': (1 / max(hw_mape, 0.1)) / total_inv_error
+            'sarimax': (1 / max(sarimax_mape, 1)) / total_inv_error,
+            'holtwinters': (1 / max(hw_mape, 1)) / total_inv_error
         }
         
         return self
@@ -308,6 +399,17 @@ class EnsembleForecaster:
         yhat_lower = w_s * np.array(sarimax_forecast['yhat_lower']) + w_h * np.array(hw_forecast['yhat_lower'])
         yhat_upper = w_s * np.array(sarimax_forecast['yhat_upper']) + w_h * np.array(hw_forecast['yhat_upper'])
         
+        # Check for flat forecast and add trend if needed
+        n_train = len(self.training_data)
+        forecast_range = np.max(yhat) - np.min(yhat)
+        historical_range = np.max(self.training_data['y']) - np.min(self.training_data['y'])
+        
+        if forecast_range < 0.15 * historical_range:
+            trend_projection = project_trend(self.trend_slope, self.trend_intercept, n_train, periods)
+            last_actual = self.training_data['y'].iloc[-1]
+            trend_adjustment = trend_projection - trend_projection[0] + last_actual
+            yhat = 0.6 * yhat + 0.4 * trend_adjustment
+        
         return pd.DataFrame({
             'ds': sarimax_forecast['ds'],
             'yhat': yhat,
@@ -319,12 +421,6 @@ class EnsembleForecaster:
 class CallVolumeForecaster:
     """
     Unified forecaster interface supporting multiple model types.
-    
-    Model types:
-    - 'sarimax': SARIMAX with Axiom Ray exogenous variable
-    - 'sarimax_baseline': SARIMAX without exogenous variable
-    - 'holtwinters': Holt-Winters Triple Exponential Smoothing
-    - 'ensemble': Weighted ensemble of SARIMAX + Holt-Winters
     """
     
     LEAD_WEEKS = 2
@@ -367,7 +463,6 @@ class CallVolumeForecaster:
         return self.model.forecast(periods, future_exog)
     
     def predict(self, df_future, include_history=True):
-        """Make predictions for given dates."""
         if not isinstance(df_future, pd.DataFrame):
             raise ValueError("Input must be a pandas DataFrame")
         
@@ -433,9 +528,7 @@ class CallVolumeForecaster:
 
 
 def compare_all_models(df_train, df_test, forecast_periods):
-    """
-    Compare all available models: SARIMAX, SARIMAX+Axiom, Holt-Winters, Ensemble.
-    """
+    """Compare all available models."""
     if not isinstance(df_train, pd.DataFrame) or not isinstance(df_test, pd.DataFrame):
         raise ValueError("Inputs must be pandas DataFrames")
     
@@ -481,16 +574,12 @@ def compare_all_models(df_train, df_test, forecast_periods):
 
 
 def compare_forecasts(df_train, df_test, forecast_periods):
-    """
-    Compare forecasts with and without Axiom Ray exogenous variable.
-    (Backward compatible function - now uses ensemble as enhanced model)
-    """
+    """Backward compatible comparison function."""
     if not isinstance(df_train, pd.DataFrame) or not isinstance(df_test, pd.DataFrame):
         raise ValueError("Inputs must be pandas DataFrames")
     
     results = {}
     
-    # Baseline: SARIMAX without Axiom Ray
     model_baseline = CallVolumeForecaster(model_type='sarimax_baseline')
     model_baseline.fit(df_train)
     metrics_baseline, eval_baseline = model_baseline.evaluate(df_test)
@@ -504,7 +593,6 @@ def compare_forecasts(df_train, df_test, forecast_periods):
         'name': 'SARIMAX Baseline'
     }
     
-    # Enhanced: Ensemble model
     if 'axiom_ray_score' in df_train.columns:
         model_enhanced = CallVolumeForecaster(model_type='ensemble')
         model_enhanced.fit(df_train)
