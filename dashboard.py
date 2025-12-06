@@ -283,13 +283,16 @@ def main():
         st.stop()
     
     # Fixed parameters (removed sidebar for cleaner presentation)
-    test_size = 0.20  # 20% test set
-    forecast_periods = 13  # 13 weeks (3 months)
+    test_weeks = 13  # Use exactly 13 weeks for testing
+    forecast_periods = 13  # 13 weeks (3 months) forecast horizon
     changepoint_prior = 0.05
     seasonality_prior = 10.0
     
-    # Split data
-    train_df, test_df = train_test_split(df, test_size=test_size)
+    # Split data - use exactly 13 weeks for test set
+    df = df.sort_values('ds').reset_index(drop=True)
+    split_idx = len(df) - test_weeks
+    train_df = df.iloc[:split_idx].copy()
+    test_df = df.iloc[split_idx:].copy()
     
     # Train model with progress visibility
     status_container = st.empty()
@@ -1422,19 +1425,26 @@ RECOMMENDATIONS:
         st.header("Short-Term Daily Forecasting")
         st.markdown("**5-Day Ahead Forecasts for Immediate Staffing Decisions**")
         
-        # Generate daily data from weekly - use all available historical data for robust training
-        # Convert entire weekly history to daily (156 weeks = ~1092 days)
-        total_weeks = len(df)
-        days_back = total_weeks * 7  # Convert all weeks to days
-        daily_df = generate_daily_data(df, days_back=days_back)
-        
-        # Compare short-term models
-        short_term_results, daily_train, daily_test = compare_short_term_models(daily_df, test_days=5)
-        
-        # Model comparison metrics
-        st.subheader("Short-Term Model Performance (5-Day Test)")
-        
-        if short_term_results:
+        try:
+            # Generate daily data from weekly - use last year for robust training (365 days)
+            # This is plenty for deep learning models while keeping it manageable
+            days_back = min(365, len(df) * 7)  # Use up to 1 year, or all available if less
+            daily_df = generate_daily_data(df, days_back=days_back)
+            
+            if daily_df is None or len(daily_df) == 0:
+                st.error("Failed to generate daily data. Please check the data generation process.")
+                st.stop()
+            
+            # Compare short-term models
+            short_term_results, daily_train, daily_test = compare_short_term_models(daily_df, test_days=5)
+            
+            # Show data split info
+            st.info(f"**Data Split:** {len(daily_train):,} days training | {len(daily_test)} days test | Total: {len(daily_df):,} days")
+            
+            # Model comparison metrics
+            st.subheader("Short-Term Model Performance (5-Day Test)")
+            
+            if short_term_results:
             perf_data = []
             for method, result in short_term_results.items():
                 m = result['metrics']
@@ -1446,28 +1456,37 @@ RECOMMENDATIONS:
                     'CI Coverage': f"{m['Within_CI_%']:.0f}%"
                 })
             
-            perf_df = pd.DataFrame(perf_data)
-            st.dataframe(perf_df, use_container_width=True, hide_index=True)
+                perf_df = pd.DataFrame(perf_data)
+                st.dataframe(perf_df, use_container_width=True, hide_index=True)
+                
+                # Best model
+                best_model = min(short_term_results.items(), key=lambda x: x[1]['metrics']['MAPE'])
+                st.success(f"**Best Short-Term Model:** {best_model[1]['name']} with {100 - best_model[1]['metrics']['MAPE']:.1f}% accuracy")
+            else:
+                st.warning("No models were successfully trained. This may be due to insufficient data or model errors.")
             
-            # Best model
-            best_model = min(short_term_results.items(), key=lambda x: x[1]['metrics']['MAPE'])
-            st.success(f"**Best Short-Term Model:** {best_model[1]['name']} with {100 - best_model[1]['metrics']['MAPE']:.1f}% accuracy")
+            st.markdown("---")
+            
+            # 5-Day Forecast
+            st.subheader("Next 5 Days Forecast")
+            
+            # Show training data info
+            st.info(f"**Training Data:** {len(daily_df):,} days of historical data used for model training")
+            
+            # Use ensemble model for forecast
+            ensemble_model = ShortTermForecaster(method='ensemble')
+            ensemble_model.fit(daily_df)
+            forecast_5day = ensemble_model.forecast(days=5)
+            
+            if forecast_5day is None or len(forecast_5day) == 0:
+                st.error("Failed to generate forecast. Please check the model training.")
+                st.stop()
         
-        st.markdown("---")
-        
-        # 5-Day Forecast
-        st.subheader("Next 5 Days Forecast")
-        
-        # Use ensemble model for forecast
-        ensemble_model = ShortTermForecaster(method='ensemble')
-        ensemble_model.fit(daily_df)
-        forecast_5day = ensemble_model.forecast(days=5)
-        
-        # Forecast chart
+        # Forecast chart - show last 90 days for context
         fig = go.Figure()
         
-        # Historical (last 14 days)
-        recent_daily = daily_df.tail(14)
+        # Historical (last 90 days for better context)
+        recent_daily = daily_df.tail(90)
         fig.add_trace(go.Scatter(
             x=recent_daily['ds'], y=recent_daily['y'],
             name='Historical', line=dict(color='#1f77b4', width=2),
@@ -1598,6 +1617,10 @@ RECOMMENDATIONS:
         - **Neural Network (MLP)**: Feedforward network with lagged features and day-of-week encoding
         - **Ensemble**: Combines all methods for robustness
         """)
+        
+        except Exception as e:
+            st.error(f"Error in short-term forecasting: {str(e)}")
+            st.exception(e)
     
     # Footer with author attribution
     st.markdown("---")

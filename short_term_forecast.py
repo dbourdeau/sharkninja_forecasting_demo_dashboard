@@ -513,6 +513,12 @@ class ShortTermForecaster:
 def compare_short_term_models(daily_df, test_days=5):
     """Compare all short-term forecasting methods."""
     
+    if daily_df is None or len(daily_df) < 14:
+        raise ValueError(f"Insufficient data: need at least 14 days, got {len(daily_df) if daily_df is not None else 0}")
+    
+    if len(daily_df) < test_days + 7:
+        raise ValueError(f"Insufficient data: need at least {test_days + 7} days for train/test split")
+    
     # Split into train/test
     train_df = daily_df.iloc[:-test_days].copy()
     test_df = daily_df.iloc[-test_days:].copy()
