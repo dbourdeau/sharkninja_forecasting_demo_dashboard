@@ -1252,86 +1252,176 @@ RECOMMENDATIONS:
         """)
     
     with tab7:
-        st.header("Model Performance on Test Set")
+        st.header("Multi-Model Performance Evaluation")
+        st.markdown("**Comprehensive comparison of all forecasting models on test data**")
         
-        # Display metrics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("MAE", f"{metrics['MAE']:.1f}")
-        with col2:
-            st.metric("RMSE", f"{metrics['RMSE']:.1f}")
-        with col3:
-            st.metric("MAPE", f"{metrics['MAPE']:.1f}%")
-        with col4:
-            st.metric("Within CI (%)", f"{metrics['Within_CI_%']:.1f}%")
+        # Model colors
+        model_colors = {
+            'sarimax_baseline': '#ff7f0e',
+            'sarimax_axiom': '#2ca02c',
+            'holtwinters': '#9467bd',
+            'ensemble': '#d62728'
+        }
         
-        # Plot predictions vs actuals
+        # Performance metrics comparison table
+        st.subheader("Performance Metrics Comparison")
+        
+        perf_data = []
+        for key, data in all_model_forecasts.items():
+            m = data['metrics']
+            perf_data.append({
+                'Model': data['name'],
+                'MAE': m['MAE'],
+                'RMSE': m['RMSE'],
+                'MAPE (%)': m['MAPE'],
+                'Accuracy (%)': 100 - m['MAPE'],
+                'CI Coverage (%)': m['Within_CI_%']
+            })
+        
+        perf_df = pd.DataFrame(perf_data)
+        
+        # Highlight best values
+        st.dataframe(
+            perf_df.style.highlight_min(subset=['MAE', 'RMSE', 'MAPE (%)'], color='lightgreen')
+                        .highlight_max(subset=['Accuracy (%)', 'CI Coverage (%)'], color='lightgreen')
+                        .format({'MAE': '{:.1f}', 'RMSE': '{:.1f}', 'MAPE (%)': '{:.2f}', 
+                                'Accuracy (%)': '{:.2f}', 'CI Coverage (%)': '{:.1f}'}),
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Best model highlight
+        best_model = min(perf_data, key=lambda x: x['MAPE (%)'])
+        st.success(f"**Best Model:** {best_model['Model']} with {best_model['Accuracy (%)']:.1f}% accuracy (MAPE: {best_model['MAPE (%)']:.2f}%)")
+        
+        st.markdown("---")
+        
+        # Predictions vs Actuals - All Models
+        st.subheader("Predictions vs Actuals - All Models")
+        
         fig = go.Figure()
         
+        # Actual values (from any eval_df, they all have same actuals)
         fig.add_trace(go.Scatter(
             x=eval_df['ds'],
             y=eval_df['y'],
             mode='lines+markers',
             name='Actual',
-            line=dict(color='#1f77b4', width=2),
-            marker=dict(size=6)
+            line=dict(color='#1f77b4', width=3),
+            marker=dict(size=8)
         ))
         
-        fig.add_trace(go.Scatter(
-            x=eval_df['ds'],
-            y=eval_df['yhat'],
-            mode='lines+markers',
-            name='Predicted',
-            line=dict(color='#ff7f0e', width=2, dash='dash'),
-            marker=dict(size=6)
-        ))
-        
-        # Confidence intervals
-        fig.add_trace(go.Scatter(
-            x=eval_df['ds'].tolist() + eval_df['ds'].tolist()[::-1],
-            y=eval_df['yhat_upper'].tolist() + eval_df['yhat_lower'].tolist()[::-1],
-            fill='toself',
-            fillcolor='rgba(255, 127, 14, 0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            showlegend=False,
-            hoverinfo="skip"
-        ))
+        # Add each model's predictions
+        line_styles = ['dash', 'solid', 'dot', 'dashdot']
+        for i, (key, result) in enumerate(all_models.items()):
+            eval_data = result['eval_df']
+            fig.add_trace(go.Scatter(
+                x=eval_data['ds'],
+                y=eval_data['yhat'],
+                mode='lines+markers',
+                name=result['name'],
+                line=dict(color=model_colors.get(key, '#888'), width=2, dash=line_styles[i % len(line_styles)]),
+                marker=dict(size=5)
+            ))
         
         fig.update_layout(
-            title="Predictions vs Actuals on Test Set",
+            title="All Models: Predictions vs Actuals on Test Set",
             xaxis_title="Date",
             yaxis_title="Call Volume",
             hovermode='x unified',
-            height=500,
-            template='plotly_white'
+            height=550,
+            template='plotly_white',
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
         )
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Residuals plot
-        eval_df['residual'] = eval_df['y'] - eval_df['yhat']
+        st.markdown("---")
         
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(
-            x=eval_df['ds'],
-            y=eval_df['residual'],
-            mode='lines+markers',
-            name='Residuals',
-            line=dict(color='#d62728', width=1),
-            marker=dict(size=4)
-        ))
+        # Error comparison bar chart
+        st.subheader("Model Error Comparison")
         
-        fig2.add_hline(y=0, line_dash="dash", line_color="gray")
+        col1, col2 = st.columns(2)
         
-        fig2.update_layout(
-            title="Residuals Plot",
-            xaxis_title="Date",
-            yaxis_title="Residual (Actual - Predicted)",
-            height=400,
-            template='plotly_white'
-        )
+        with col1:
+            # MAPE comparison
+            fig_mape = go.Figure()
+            fig_mape.add_trace(go.Bar(
+                x=[d['Model'] for d in perf_data],
+                y=[d['MAPE (%)'] for d in perf_data],
+                marker_color=[model_colors.get(k, '#888') for k in all_model_forecasts.keys()],
+                text=[f"{d['MAPE (%)']:.2f}%" for d in perf_data],
+                textposition='outside'
+            ))
+            fig_mape.update_layout(
+                title="MAPE by Model (Lower is Better)",
+                yaxis_title="MAPE (%)",
+                height=400,
+                showlegend=False
+            )
+            st.plotly_chart(fig_mape, use_container_width=True)
         
-        st.plotly_chart(fig2, use_container_width=True)
+        with col2:
+            # MAE comparison
+            fig_mae = go.Figure()
+            fig_mae.add_trace(go.Bar(
+                x=[d['Model'] for d in perf_data],
+                y=[d['MAE'] for d in perf_data],
+                marker_color=[model_colors.get(k, '#888') for k in all_model_forecasts.keys()],
+                text=[f"{d['MAE']:.0f}" for d in perf_data],
+                textposition='outside'
+            ))
+            fig_mae.update_layout(
+                title="MAE by Model (Lower is Better)",
+                yaxis_title="MAE (calls)",
+                height=400,
+                showlegend=False
+            )
+            st.plotly_chart(fig_mae, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # Residuals comparison
+        st.subheader("Residuals Analysis by Model")
+        
+        fig_resid = make_subplots(rows=2, cols=2, 
+                                   subplot_titles=[result['name'] for result in all_models.values()])
+        
+        positions = [(1,1), (1,2), (2,1), (2,2)]
+        for i, (key, result) in enumerate(all_models.items()):
+            eval_data = result['eval_df'].copy()
+            eval_data['residual'] = eval_data['y'] - eval_data['yhat']
+            row, col = positions[i]
+            
+            fig_resid.add_trace(
+                go.Scatter(
+                    x=eval_data['ds'],
+                    y=eval_data['residual'],
+                    mode='lines+markers',
+                    name=result['name'],
+                    line=dict(color=model_colors.get(key, '#888'), width=1),
+                    marker=dict(size=4),
+                    showlegend=False
+                ),
+                row=row, col=col
+            )
+            fig_resid.add_hline(y=0, line_dash="dash", line_color="gray", row=row, col=col)
+        
+        fig_resid.update_layout(height=600, title_text="Residuals by Model (Actual - Predicted)")
+        st.plotly_chart(fig_resid, use_container_width=True)
+        
+        # Model selection guidance
+        st.markdown("---")
+        st.subheader("Model Selection Guidance")
+        st.markdown("""
+        | Criteria | Recommended Model |
+        |----------|-------------------|
+        | **Best Overall Accuracy** | Ensemble or SARIMAX + Axiom Ray |
+        | **Fastest Training** | Holt-Winters |
+        | **Interpretability** | SARIMAX Baseline |
+        | **External Factors Matter** | SARIMAX + Axiom Ray |
+        | **Robust & Balanced** | Ensemble |
+        """)
     
     # Footer with SharkNinja branding
     st.markdown("---")
