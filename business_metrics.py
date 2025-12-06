@@ -26,33 +26,52 @@ def calculate_staffing_needs(forecast_df, avg_handle_time_minutes=4.5, service_l
         DataFrame with staffing calculations
     """
     # Convert weekly calls to staffing needs
-    # Assume 5-day work week, 8 hours/day = 40 hours/week
-    hours_per_week = 40
+    # Assume 5-day work week, 10 hours/day (e.g., 8am-6pm) = 50 hours/week
+    # This is more realistic for call center operations
+    hours_per_day = 10
+    days_per_week = 5
+    hours_per_week = hours_per_day * days_per_week  # 50 hours
     
     # Calculate total productive hours needed (time actually handling calls)
     productive_hours = (forecast_df['yhat'] * avg_handle_time_minutes) / 60
     
-    # Account for call arrival patterns (not uniform)
-    # Calls cluster during business hours - busy hours need more agents
-    # Typical distribution: 60% of calls in 40% of hours (busy period)
-    busy_period_factor = 1.5  # Busy periods have 1.5x average volume
+    # Account for intraday call arrival patterns (NOT uniform distribution)
+    # Reality: Calls cluster significantly during peak hours
+    # Typical pattern: 
+    #   - 30-40% of daily calls in peak 2-3 hours (lunch, afternoon)
+    #   - Average intraday peak: 2.5-3.0x the hourly average (conservative estimate)
+    #   - We need to staff for these peak hours, not the average
+    #   - For weekly data, estimate peak hour as 2.5x average hourly rate
+    #   - This ensures adequate coverage during busy periods
+    hourly_average_rate = forecast_df['yhat'] / (days_per_week * hours_per_day)  # calls per hour (average)
+    peak_multiplier = 2.5  # Peak hours are 2.5x average (conservative, realistic for most centers)
+    peak_hourly_rate = hourly_average_rate * peak_multiplier
     
-    # Effective hours needed accounting for clustering
-    effective_hours = productive_hours * busy_period_factor
+    # Peak hour staffing requirement (this is what we need to staff for)
+    # At peak hour: peak_rate calls/hour * AHT = productive minutes needed per hour
+    # Convert to agents needed: productive_minutes / (60 min * occupancy_rate)
+    peak_productive_minutes_per_hour = peak_hourly_rate * avg_handle_time_minutes
     
-    # Target occupancy rate (agents not 100% busy due to service level needs)
+    # Target occupancy rate for service level
     # For 80% service level: target 75-85% occupancy is realistic
-    # Lower occupancy = better service level (agents available for spikes)
-    base_occupancy = 0.75 + (service_level_target * 0.15)  # 75-90% range
-    target_occupancy = np.clip(base_occupancy, 0.70, 0.90)
+    # Higher occupancy = longer wait times = lower service level
+    target_occupancy = 0.75 + (service_level_target * 0.125)  # 75-85% range for 80% SL
+    target_occupancy = np.clip(target_occupancy, 0.70, 0.90)
     
-    # Base FTE calculation accounting for occupancy
-    base_ftes = effective_hours / (hours_per_week * target_occupancy)
+    # Agents needed for peak hour
+    # Formula: (calls/hour * AHT_minutes) / (60 * occupancy)
+    peak_agents_needed = peak_productive_minutes_per_hour / (60 * target_occupancy)
     
-    # Add service level safety buffer
-    # Erlang C theory: need extra agents for queue management
-    # 80% service level typically needs 15-20% buffer over base
-    sl_buffer_multiplier = 1.0 + ((1.0 - service_level_target) * 0.25)
+    # This gives us agents needed at peak - but we need them for the full day
+    # However, since we're calculating weekly, we apply this as base FTE
+    # The peak requirement drives the staffing level
+    base_ftes = peak_agents_needed
+    
+    # Add service level safety buffer for queue management
+    # Erlang C: Extra agents needed to maintain service level during variability
+    # For 80% service level: typically need 10-15% buffer over base
+    # Adding slightly more buffer to ensure service quality
+    sl_buffer_multiplier = 1.0 + ((1.0 - service_level_target) * 0.25)  # 1.05 for 80% SL (slightly more conservative)
     fte_with_buffer = base_ftes * sl_buffer_multiplier
     
     # Minimum staffing requirement (always need coverage)
@@ -68,15 +87,22 @@ def calculate_staffing_needs(forecast_df, avg_handle_time_minutes=4.5, service_l
     # Calculate weekly hours worked
     weekly_hours = (agents_needed * hours_per_week).astype(float)
     
-    # For display: also show productive hours (time actually handling calls)
+    # Calculate productive hours (time actually handling calls)
     productive_hours = (forecast_df['yhat'] * avg_handle_time_minutes) / 60
+    
+    # Occupancy calculation:
+    # This represents actual utilization across the week
+    # Lower occupancy = agents have more idle time = better ability to handle spikes
+    # Higher occupancy = agents more busy = risk of service degradation
+    # Realistic range: 60-85% for most call centers
+    occupancy_pct = ((productive_hours / weekly_hours) * 100).clip(0, 100)
     
     result = forecast_df[['ds', 'yhat']].copy()
     result['weekly_hours'] = weekly_hours.round(1)
     result['productive_hours'] = productive_hours.round(1)
     result['agents_needed'] = agents_needed
     result['fte_needed'] = fte_needed.round(1)
-    result['occupancy_pct'] = ((productive_hours / weekly_hours) * 100).round(1)
+    result['occupancy_pct'] = occupancy_pct.round(1)
     
     return result
 
