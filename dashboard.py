@@ -568,8 +568,8 @@ RECOMMENDATIONS:
             )
     
     with tab1:
-        st.header("Multi-Model Forecast Comparison")
-        st.markdown("**Compare all forecasting models: SARIMAX, Holt-Winters, and Ensemble**")
+        st.header(f"Multi-Model Forecast Comparison ({forecast_periods}-Week Horizon)")
+        st.markdown(f"**Compare all forecasting models over the next {forecast_periods} weeks: SARIMAX, Holt-Winters, and Ensemble**")
         
         # Model comparison metrics - show all 4 models
         st.subheader("Model Performance Summary")
@@ -1246,7 +1246,8 @@ RECOMMENDATIONS:
     
     with tab7:
         st.header("Multi-Model Performance Evaluation")
-        st.markdown("**Comprehensive comparison of all forecasting models on test data**")
+        test_weeks = len(test_df)
+        st.markdown(f"**Comprehensive comparison of all forecasting models on {test_weeks}-week test set**")
         
         # Model colors
         model_colors = {
@@ -1421,8 +1422,11 @@ RECOMMENDATIONS:
         st.header("Short-Term Daily Forecasting")
         st.markdown("**5-Day Ahead Forecasts for Immediate Staffing Decisions**")
         
-        # Generate daily data from weekly
-        daily_df = generate_daily_data(df, days_back=90)
+        # Generate daily data from weekly - use all available historical data for robust training
+        # Convert entire weekly history to daily (156 weeks = ~1092 days)
+        total_weeks = len(df)
+        days_back = total_weeks * 7  # Convert all weeks to days
+        daily_df = generate_daily_data(df, days_back=days_back)
         
         # Compare short-term models
         short_term_results, daily_train, daily_test = compare_short_term_models(daily_df, test_days=5)
@@ -1538,8 +1542,9 @@ RECOMMENDATIONS:
             ))
             
             # Predictions from each model
-            colors = {'ses': '#ff7f0e', 'arima': '#2ca02c', 'dow_avg': '#9467bd', 'lstm': '#d62728'}
-            for method in ['ses', 'arima', 'dow_avg', 'lstm']:
+            colors = {'ses': '#ff7f0e', 'arima': '#2ca02c', 'dow_avg': '#9467bd', 
+                     'lstm': '#d62728', 'nn': '#8c564b'}
+            for method in ['ses', 'arima', 'dow_avg', 'lstm', 'nn']:
                 if method in short_term_results:
                     pred_col = f'{method}_forecast'
                     if pred_col in eval_df.columns and eval_df[pred_col].notna().all():
@@ -1585,11 +1590,12 @@ RECOMMENDATIONS:
         
         # Info box
         st.info("""
-        **Short-Term Forecasting Methods:**
+        **Short-Term Forecasting Methods (5-Day Horizon):**
         - **Simple Exp. Smoothing**: Good for stable patterns
         - **ARIMA(2,0,1)**: Captures short-term dynamics
         - **Day-of-Week Average**: Uses historical day patterns
-        - **LSTM (Deep Learning)**: Industry-standard neural network for time series
+        - **LSTM (Deep Learning)**: Recurrent neural network for sequential patterns
+        - **Neural Network (MLP)**: Feedforward network with lagged features and day-of-week encoding
         - **Ensemble**: Combines all methods for robustness
         """)
     

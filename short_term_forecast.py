@@ -167,6 +167,19 @@ class ShortTermForecaster:
             self.models['lstm'] = None
             self.scaler = None
         
+        # Fit Feedforward Neural Network (MLP)
+        if TENSORFLOW_AVAILABLE and len(y) >= 14:
+            try:
+                nn_model, nn_scaler = self._fit_neural_network(df)
+                self.models['nn'] = nn_model
+                self.nn_scaler = nn_scaler
+            except Exception as e:
+                self.models['nn'] = None
+                self.nn_scaler = None
+        else:
+            self.models['nn'] = None
+            self.nn_scaler = None
+        
         return self
     
     def _fit_lstm(self, y):
@@ -242,6 +255,134 @@ class ShortTermForecaster:
         
         return forecasts
     
+    def _fit_neural_network(self, df):
+        """Fit feedforward neural network on time series with features."""
+        # Create features: lagged values, day of week, trend
+        feature_length = 7  # Use last 7 days
+        
+        X_list = []
+        y_list = []
+        
+        y = np.array(df['y']).astype(float)
+        dow = np.array(df['day_of_week'])
+        
+        for i in range(feature_length, len(y)):
+            # Lagged values (last 7 days)
+            lag_features = y[i-feature_length:i]
+            
+            # Day of week (one-hot encoded)
+            dow_onehot = np.zeros(7)
+            dow_onehot[dow[i]] = 1
+            
+            # Recent trend (3-day moving average vs 7-day)
+            ma3 = np.mean(y[i-3:i]) if i >= 3 else y[i-1]
+            ma7 = np.mean(y[i-7:i])
+            trend_feature = ma3 - ma7
+            
+            # Combine all features
+            features = np.concatenate([
+                lag_features,
+                dow_onehot,
+                [trend_feature]
+            ])
+            
+            X_list.append(features)
+            y_list.append(y[i])
+        
+        X = np.array(X_list)
+        y_seq = np.array(y_list)
+        
+        # Normalize features
+        scaler = MinMaxScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Normalize target
+        y_scaled = (y_seq - y_seq.mean()) / (y_seq.std() + 1e-8)
+        
+        # Build feedforward neural network
+        model = Sequential([
+            Dense(64, activation='relu', input_shape=(X_scaled.shape[1],)),
+            Dropout(0.3),
+            Dense(32, activation='relu'),
+            Dropout(0.2),
+            Dense(16, activation='relu'),
+            Dense(1)
+        ])
+        
+        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        
+        # Early stopping
+        early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
+        
+        # Train
+        model.fit(X_scaled, y_scaled, epochs=50, batch_size=min(16, len(X)//2),
+                 verbose=0, callbacks=[early_stop], validation_split=0.2)
+        
+        # Store scaler and normalization params for inverse transform
+        nn_scaler = {
+            'feature_scaler': scaler,
+            'y_mean': y_seq.mean(),
+            'y_std': y_seq.std()
+        }
+        
+        return model, nn_scaler
+    
+    def _forecast_neural_network(self, days=5):
+        """Generate neural network forecast."""
+        if self.models.get('nn') is None or self.nn_scaler is None:
+            return None
+        
+        model = self.models['nn']
+        scaler = self.nn_scaler
+        df = self.training_data
+        
+        y = np.array(df['y']).astype(float)
+        dow = np.array(df['day_of_week'])
+        
+        forecasts = []
+        
+        # Get last values for initial features
+        last_y = y[-7:].tolist()
+        last_dow = dow[-7:].tolist()
+        
+        for i in range(days):
+            # Determine day of week for forecast day
+            last_date = df['ds'].max()
+            forecast_date = last_date + timedelta(days=i+1)
+            forecast_dow = forecast_date.dayofweek
+            
+            # Prepare features
+            lag_features = np.array(last_y[-7:])
+            
+            dow_onehot = np.zeros(7)
+            dow_onehot[forecast_dow] = 1
+            
+            # Trend feature
+            if len(last_y) >= 7:
+                ma3 = np.mean(last_y[-3:])
+                ma7 = np.mean(last_y[-7:])
+            else:
+                ma3 = np.mean(last_y)
+                ma7 = np.mean(last_y)
+            trend_feature = ma3 - ma7
+            
+            features = np.concatenate([lag_features, dow_onehot, [trend_feature]]).reshape(1, -1)
+            
+            # Scale and predict
+            features_scaled = scaler['feature_scaler'].transform(features)
+            pred_scaled = model.predict(features_scaled, verbose=0)[0, 0]
+            
+            # Inverse transform
+            pred = pred_scaled * scaler['y_std'] + scaler['y_mean']
+            forecasts.append(max(pred, 10))  # Minimum floor
+            
+            # Update last_y for next iteration
+            last_y.append(pred)
+            if len(last_y) > 14:
+                last_y = last_y[-14:]
+        
+        return np.array(forecasts)
+    
     def forecast(self, days=5):
         """Generate forecast for next N days."""
         if self.training_data is None:
@@ -280,10 +421,16 @@ class ShortTermForecaster:
             if lstm_forecast is not None:
                 forecasts['lstm'] = lstm_forecast
         
-        # Ensemble: weighted average (LSTM gets higher weight if available)
+        # Neural Network forecast
+        if self.models.get('nn'):
+            nn_forecast = self._forecast_neural_network(days)
+            if nn_forecast is not None:
+                forecasts['nn'] = nn_forecast
+        
+        # Ensemble: weighted average (includes all models)
         available_forecasts = [f for f in [forecasts.get('ses'), forecasts.get('arima'), 
                                            forecasts.get('hw'), forecasts.get('lstm'),
-                                           forecasts.get('dow_avg')] 
+                                           forecasts.get('nn'), forecasts.get('dow_avg')] 
                              if f is not None]
         
         if available_forecasts:
@@ -317,6 +464,7 @@ class ShortTermForecaster:
         result_df['arima_forecast'] = forecasts.get('arima', forecasts['dow_avg']).round(0).astype(int) if 'arima' in forecasts else None
         result_df['hw_forecast'] = forecasts.get('hw', forecasts['dow_avg']).round(0).astype(int) if 'hw' in forecasts else None
         result_df['lstm_forecast'] = forecasts.get('lstm', forecasts['dow_avg']).round(0).astype(int) if 'lstm' in forecasts else None
+        result_df['nn_forecast'] = forecasts.get('nn', forecasts['dow_avg']).round(0).astype(int) if 'nn' in forecasts else None
         result_df['dow_forecast'] = forecasts['dow_avg'].round(0).astype(int)
         
         return result_df
@@ -370,13 +518,14 @@ def compare_short_term_models(daily_df, test_days=5):
     test_df = daily_df.iloc[-test_days:].copy()
     
     results = {}
-    methods = ['ses', 'arima', 'dow_avg', 'lstm', 'ensemble']
+    methods = ['ses', 'arima', 'dow_avg', 'lstm', 'nn', 'ensemble']
     
     name_map = {
         'ses': 'Simple Exp. Smoothing',
         'arima': 'ARIMA(2,0,1)',
         'dow_avg': 'Day-of-Week Average',
         'lstm': 'LSTM (Deep Learning)',
+        'nn': 'Neural Network (MLP)',
         'ensemble': 'Ensemble'
     }
     
