@@ -1445,17 +1445,17 @@ RECOMMENDATIONS:
             st.subheader("Short-Term Model Performance (5-Day Test)")
             
             if short_term_results:
-            perf_data = []
-            for method, result in short_term_results.items():
-                m = result['metrics']
-                perf_data.append({
-                    'Model': result['name'],
-                    'MAE': f"{m['MAE']:.1f}",
-                    'MAPE (%)': f"{m['MAPE']:.1f}",
-                    'Accuracy (%)': f"{100 - m['MAPE']:.1f}",
-                    'CI Coverage': f"{m['Within_CI_%']:.0f}%"
-                })
-            
+                perf_data = []
+                for method, result in short_term_results.items():
+                    m = result['metrics']
+                    perf_data.append({
+                        'Model': result['name'],
+                        'MAE': f"{m['MAE']:.1f}",
+                        'MAPE (%)': f"{m['MAPE']:.1f}",
+                        'Accuracy (%)': f"{100 - m['MAPE']:.1f}",
+                        'CI Coverage': f"{m['Within_CI_%']:.0f}%"
+                    })
+                
                 perf_df = pd.DataFrame(perf_data)
                 st.dataframe(perf_df, use_container_width=True, hide_index=True)
                 
