@@ -281,7 +281,7 @@ def main():
     """Main dashboard application."""
     # Header with SharkNinja branding
     st.markdown('<p class="main-header">SharkNinja Customer Support Forecasting</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Powered by Axiom Ray AI | Predictive Analytics for Workforce Optimization</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Author: Dan Bourdeau</p>', unsafe_allow_html=True)
     st.markdown("---")
     
     # Load data
@@ -1895,9 +1895,8 @@ RECOMMENDATIONS:
     st.markdown(f"""
     <div style='text-align: center; color: {DARK_GRAY}; padding: 20px;'>
         <p style='font-size: 1.1rem; font-weight: bold;'>SharkNinja Customer Support Forecasting</p>
-        <p>Powered by <span style='color: {SHARK_TEAL};'>Axiom Ray AI</span> | Predictive Workforce Analytics</p>
         <p style='font-size: 0.95rem; color: {DARK_GRAY}; margin-top: 15px;'>
-            <strong>Author:</strong> Daniel Bourdeau
+            <strong>Author:</strong> Dan Bourdeau
         </p>
         <p style='font-size: 0.9rem; color: gray;'>
             For SharkNinja CS Forecasting Analyst Interview
