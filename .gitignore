@@ -4,13 +4,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
 venv/
-.venv/
 ENV/
-
-# Data files (will be auto-generated)
-data/
 
 # IDE
 .idea/
@@ -25,5 +20,6 @@ data/
 .DS_Store
 Thumbs.db
 
-# Logs
+# Temporary files
+*.tmp
 *.log

@@ -1,62 +1,91 @@
-# Call Center Volume Forecasting Demo
+# SharkNinja Customer Support Forecasting Dashboard
 
-A demonstration forecasting dashboard for call center volume prediction using Facebook's Prophet with exogenous variables (Axiom Ray AI predictions).
+**Author:** Daniel Bourdeau  
+**Purpose:** SharkNinja CS Forecasting Analyst Interview  
+**Note:** For demonstration purposes only - uses synthetic data
+
+## Overview
+
+Interactive forecasting dashboard for call center volume prediction using multiple time series models:
+
+- **SARIMAX** - Seasonal ARIMA with trend
+- **SARIMAX + Axiom Ray** - With AI early-warning signals as exogenous variable
+- **Holt-Winters** - Triple Exponential Smoothing
+- **Ensemble** - Weighted combination of models
 
 ## Features
 
-- **Weekly Call Volume Forecasting**: Predicts future call volumes for a major product line
-- **Exogenous Variables**: Incorporates Axiom Ray AI tool predictions as external regressors
-- **Interactive Dashboard**: Streamlit-based dashboard for visualization and analysis
-- **Synthetic Data**: Realistic synthetic data generation for demonstration purposes
+- Multi-model forecast comparison
+- Business impact analysis (staffing, costs, ROI)
+- Scenario planning (what-if analysis)
+- Product category breakdown (Shark vs Ninja)
+- Axiom Ray AI leading indicator analysis
+- Executive summary dashboard
 
-## Installation
+## Quick Start
+
+### Run Locally
 
 ```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-## Usage
-
-Generate synthetic data and run the dashboard:
-
-```bash
+# Generate synthetic data
 python generate_data.py
-streamlit run dashboard.py
+
+# Launch dashboard
+python -m streamlit run dashboard.py
 ```
 
-## Model Details
+Or simply double-click `run_demo.bat` on Windows.
 
-- **Base Model**: Facebook Prophet with weekly seasonality
-- **External Regressors**: Axiom Ray AI early issue predictions
-- **Forecast Horizon**: Configurable (default: 12 weeks)
-- **Evaluation Metrics**: MAE, RMSE, MAPE
+### Deploy to Streamlit Cloud
 
-## Files
+1. Push to GitHub
+2. Connect repository at [share.streamlit.io](https://share.streamlit.io)
+3. Deploy from `main` branch with `dashboard.py` as entry point
 
-- `generate_data.py`: Synthetic data generation for historical volumes and Axiom Ray predictions
-- `forecast_model.py`: Prophet forecasting model implementation
-- `dashboard.py`: Streamlit dashboard application
-- `data/`: Directory containing generated datasets
+## Project Structure
 
-## Deployment
+```
+├── dashboard.py          # Main Streamlit application
+├── forecast_model.py     # SARIMAX, Holt-Winters, Ensemble models
+├── generate_data.py      # Synthetic data generation
+├── business_metrics.py   # Staffing, costs, ROI calculations
+├── requirements.txt      # Python dependencies
+├── runtime.txt          # Python version for deployment
+├── data/
+│   └── combined_data.csv # Generated synthetic data
+└── .streamlit/
+    └── config.toml      # Streamlit configuration
+```
 
-The dashboard can be deployed to various platforms. See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
+## Models
 
-### Quick Deploy to Streamlit Cloud (Recommended)
+| Model | Description | Use Case |
+|-------|-------------|----------|
+| SARIMAX Baseline | Trend + seasonality | Standard forecasting |
+| SARIMAX + Axiom Ray | With 2-week leading indicator | Early warning detection |
+| Holt-Winters | Exponential smoothing | Adaptive forecasting |
+| Ensemble | Weighted average | Best overall accuracy |
 
-1. Push your code to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your GitHub repository
-4. Set main file: `dashboard.py`
-5. Click "Deploy"
+## Axiom Ray Leading Indicator
 
-The dashboard will auto-generate data on first run.
+Simulates an AI system that detects support volume changes 2 weeks ahead by monitoring:
+- Social media sentiment
+- Product review trends
+- Warranty claim patterns
+- Search trend anomalies
 
-### Other Deployment Options
+The leading indicator has ~0.7 correlation with future volume (realistic, not perfect).
 
-- **Docker**: Use the included `Dockerfile` for containerized deployment
-- **Heroku**: Use the included `Procfile`
-- **Cloud Platforms**: Deploy Docker containers to AWS, GCP, or Azure
+## Technologies
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.
+- **Streamlit** - Interactive dashboard framework
+- **Statsmodels** - SARIMAX and Holt-Winters models
+- **Plotly** - Interactive visualizations
+- **Pandas/NumPy** - Data processing
 
+---
+
+*Built for SharkNinja CS Forecasting Analyst Interview - Demonstration purposes only*
