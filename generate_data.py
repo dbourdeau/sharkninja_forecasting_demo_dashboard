@@ -4,7 +4,10 @@ Generate synthetic data for SharkNinja Customer Support Volume Forecasting.
 Key features:
 - Clear upward TREND (growing customer base)
 - Strong SEASONALITY (holiday patterns, product cycles)
-- Axiom Ray as a LEADING indicator (2 weeks ahead)
+- Axiom Ray as a LEADING indicator (independent signal, not derived from volume)
+
+IMPORTANT: Axiom Ray is generated from the SAME underlying factors that drive
+volume (events, seasonality) but NOT from volume itself. This avoids data leakage.
 """
 
 import pandas as pd
@@ -13,99 +16,118 @@ from datetime import datetime, timedelta
 import os
 
 
+def generate_underlying_factors(weeks, dates):
+    """
+    Generate the underlying factors that drive BOTH volume and axiom scores.
+    These are the "ground truth" signals that exist in the world.
+    """
+    np.random.seed(42)
+    
+    t = np.arange(weeks)
+    day_of_year = np.array([d.timetuple().tm_yday for d in dates])
+    months = np.array([d.month for d in dates])
+    
+    # ========== UNDERLYING DRIVERS ==========
+    
+    # 1. Market Growth (underlying trend)
+    growth_factor = 1.0 + 0.003 * t  # ~15% annual growth
+    
+    # 2. Seasonal Pattern (holidays, weather, etc.)
+    seasonal_factor = (
+        np.cos(2 * np.pi * (day_of_year - 355) / 365.25) +  # Winter peak
+        0.3 * np.exp(-((day_of_year - 90) ** 2) / (2 * 30 ** 2))  # Spring bump
+    )
+    
+    # 3. Monthly Effects
+    monthly_factor = np.zeros(weeks)
+    monthly_factor[months == 1] = 0.15   # Post-holiday
+    monthly_factor[months == 12] = 0.12  # Holiday rush
+    monthly_factor[months == 11] = 0.10  # Black Friday
+    monthly_factor[months == 7] = -0.08  # Summer lull
+    
+    # 4. Product Launch Events (these create spikes)
+    event_factor = np.zeros(weeks)
+    for year_offset in [0, 52, 104]:
+        # Spring launch
+        launch_week = year_offset + 12
+        if launch_week < weeks:
+            event_factor[launch_week] = 0.35
+            if launch_week + 1 < weeks:
+                event_factor[launch_week + 1] = 0.15
+        
+        # Fall launch
+        launch_week = year_offset + 38
+        if launch_week < weeks:
+            event_factor[launch_week] = 0.30
+            if launch_week + 1 < weeks:
+                event_factor[launch_week + 1] = 0.12
+        
+        # Black Friday
+        bf_week = year_offset + 47
+        if bf_week < weeks:
+            event_factor[bf_week] = 0.20
+    
+    # 5. Random quality issues (surprise spikes)
+    np.random.seed(789)
+    issue_weeks = np.random.choice(weeks, size=6, replace=False)
+    quality_factor = np.zeros(weeks)
+    for week in issue_weeks:
+        quality_factor[week] = np.random.uniform(0.1, 0.25)
+    
+    return {
+        'growth': growth_factor,
+        'seasonal': seasonal_factor,
+        'monthly': monthly_factor,
+        'events': event_factor,
+        'quality_issues': quality_factor
+    }
+
+
 def generate_call_volume_data(start_date='2021-01-04', weeks=156):
     """
-    Generate realistic call center volume data with clear trend and seasonality.
+    Generate realistic call center volume data.
+    Volume is driven by underlying factors + noise.
     """
     np.random.seed(42)
     
     dates = pd.date_range(start=start_date, periods=weeks, freq='W-MON')
-    t = np.arange(weeks)
+    factors = generate_underlying_factors(weeks, dates)
     
-    # ========== STRONG TREND ==========
-    # Clear upward trend - company growing ~15% per year
-    base_level = 400
-    annual_growth = 0.15  # 15% annual growth
-    weekly_growth = (1 + annual_growth) ** (1/52) - 1
-    trend = base_level * ((1 + weekly_growth) ** t)
+    # BASE VOLUME
+    base_level = 450
     
-    # ========== STRONG SEASONALITY ==========
-    day_of_year = np.array([d.timetuple().tm_yday for d in dates])
+    # Combine factors to create volume
+    volume = base_level * factors['growth'] * (
+        1 + 
+        0.25 * factors['seasonal'] +    # Seasonality has ~25% impact
+        factors['monthly'] +             # Monthly effects
+        factors['events'] +              # Event spikes
+        factors['quality_issues']        # Quality issues
+    )
     
-    # Primary annual cycle - peaks in winter (holidays), lowest in summer
-    annual_season = 120 * np.cos(2 * np.pi * (day_of_year - 355) / 365.25)  # Peak near New Year
+    # Add observation noise (things we can't predict)
+    np.random.seed(42)
+    observation_noise = np.random.normal(0, 35, weeks)
     
-    # Secondary cycle - spring cleaning bump
-    spring_bump = 40 * np.exp(-((day_of_year - 90) ** 2) / (2 * 30 ** 2))  # March-April
-    
-    # Quarterly pattern (product launches, Q4 retail)
-    quarterly = 30 * np.cos(4 * np.pi * day_of_year / 365.25)
-    
-    seasonality = annual_season + spring_bump + quarterly
-    
-    # ========== MONTHLY EFFECTS ==========
-    months = np.array([d.month for d in dates])
-    monthly_effect = np.zeros(weeks)
-    monthly_effect[months == 1] = 80   # Post-holiday returns
-    monthly_effect[months == 12] = 60  # Holiday rush
-    monthly_effect[months == 11] = 50  # Black Friday / Cyber Monday
-    monthly_effect[months == 7] = -30  # Summer lull
-    monthly_effect[months == 8] = -20  # Late summer
-    
-    # ========== SPECIAL EVENTS (Product Launches) ==========
-    events = np.zeros(weeks)
-    
-    # Major product launches - consistent timing each year
-    for year_offset in [0, 52, 104]:
-        # Spring launch (week 12-13 each year)
-        launch_week = year_offset + 12
-        if launch_week < weeks:
-            events[launch_week] = 150
-            if launch_week + 1 < weeks:
-                events[launch_week + 1] = 80
-            if launch_week + 2 < weeks:
-                events[launch_week + 2] = 40
-        
-        # Fall launch (week 38-39)
-        launch_week = year_offset + 38
-        if launch_week < weeks:
-            events[launch_week] = 130
-            if launch_week + 1 < weeks:
-                events[launch_week + 1] = 70
-    
-    # Black Friday spikes
-    for year_start in [0, 52, 104]:
-        bf_week = year_start + 47
-        if bf_week < weeks:
-            events[bf_week] = 100
-            if bf_week + 1 < weeks:
-                events[bf_week + 1] = 60
-    
-    # ========== NOISE (Realistic but not overwhelming) ==========
-    # Moderate white noise
-    white_noise = np.random.normal(0, 40, weeks)
-    
-    # Autocorrelated component (week-to-week persistence)
+    # Add autocorrelated noise (week-to-week persistence)
     ar_noise = np.zeros(weeks)
     ar_noise[0] = np.random.normal(0, 20)
     for i in range(1, weeks):
-        ar_noise[i] = 0.4 * ar_noise[i-1] + np.random.normal(0, 20)
+        ar_noise[i] = 0.3 * ar_noise[i-1] + np.random.normal(0, 18)
     
-    total_noise = white_noise + ar_noise
-    
-    # ========== COMBINE ALL COMPONENTS ==========
-    volume = trend + seasonality + monthly_effect + events + total_noise
-    volume = np.maximum(volume, 200)  # Minimum floor
+    volume = volume + observation_noise + ar_noise
+    volume = np.maximum(volume, 200)
     volume = np.round(volume).astype(int)
     
-    # ========== PRODUCT BREAKDOWN ==========
+    # Product breakdown
+    months = np.array([d.month for d in dates])
     shark_pct = np.zeros(weeks)
     for i, month in enumerate(months):
-        if month in [3, 4]:  # Spring cleaning - vacuums
+        if month in [3, 4]:
             shark_pct[i] = 0.62
-        elif month in [5, 6, 7]:  # Summer - kitchen (Ninja)
+        elif month in [5, 6, 7]:
             shark_pct[i] = 0.42
-        elif month in [11, 12]:  # Holiday - balanced
+        elif month in [11, 12]:
             shark_pct[i] = 0.50
         else:
             shark_pct[i] = 0.52
@@ -130,55 +152,68 @@ def generate_call_volume_data(start_date='2021-01-04', weeks=156):
     df['ninja_coffee'] = (df['ninja_volume'] * 0.25).astype(int)
     df['ninja_grills'] = (df['ninja_volume'] * 0.15).astype(int)
     
-    return df
+    return df, factors
 
 
-def generate_axiom_ray_score(df, lead_weeks=2):
+def generate_axiom_ray_score(weeks, dates, factors, lead_weeks=2):
     """
     Generate Axiom Ray AI score as a LEADING indicator.
     
-    The score predicts volume 2 weeks ahead by detecting:
-    - Social media complaints trending
-    - Review sentiment changes
-    - Warranty claim patterns
-    - Search trend anomalies
+    KEY: This is generated from the SAME underlying factors that drive volume,
+    but with a time LEAD and DIFFERENT noise. This simulates an AI system
+    detecting patterns BEFORE they result in support calls.
     
-    Key: axiom_score[t] correlates with volume[t + lead_weeks]
+    NO DATA LEAKAGE: We don't use volume values at all!
     """
-    np.random.seed(123)
+    np.random.seed(999)  # Different seed than volume
     
-    n = len(df)
-    volume = np.array(df['y'])
+    # Axiom Ray detects the underlying factors EARLY
+    # It sees events/issues ~2 weeks before they hit support lines
     
-    # Create base signal that leads volume
-    # We want axiom[t] to predict volume[t + lead_weeks]
-    # So axiom[t] should be based on volume[t + lead_weeks]
+    # Shift factors BACKWARD to create leading effect
+    # (axiom sees events at t, volume spike happens at t+lead_weeks)
     
-    # Shift volume backward to create leading relationship
-    future_volume = np.zeros(n)
-    future_volume[:-lead_weeks] = volume[lead_weeks:]
-    future_volume[-lead_weeks:] = volume[-lead_weeks:]  # Extrapolate last values
+    def shift_forward(arr, shift):
+        """Shift array forward (axiom sees it first)"""
+        result = np.zeros_like(arr)
+        result[:-shift] = arr[shift:]
+        result[-shift:] = arr[-shift:]  # Extrapolate end
+        return result
     
-    # Normalize future volume to 0-100 scale
-    vol_min, vol_max = np.percentile(future_volume, [5, 95])
-    axiom_base = 30 + 60 * (future_volume - vol_min) / (vol_max - vol_min)
-    axiom_base = np.clip(axiom_base, 20, 95)
+    # Axiom detects these factors BEFORE volume is affected
+    detected_events = shift_forward(factors['events'], lead_weeks)
+    detected_quality = shift_forward(factors['quality_issues'], lead_weeks)
+    detected_seasonal = shift_forward(factors['seasonal'], lead_weeks)
     
-    # Add realistic noise (not perfectly correlated)
-    signal_noise = np.random.normal(0, 8, n)
+    # Combine detected signals (Axiom doesn't see everything perfectly)
+    base_signal = (
+        50 +  # Base level
+        detected_events * 80 +       # Events are strongly detected
+        detected_quality * 100 +     # Quality issues are very visible
+        detected_seasonal * 15 +     # Seasonal patterns somewhat visible
+        factors['growth'] * 5        # Slight trend awareness
+    )
     
-    # Add some autocorrelation to the noise (smooth transitions)
-    smooth_noise = np.zeros(n)
-    smooth_noise[0] = signal_noise[0]
-    for i in range(1, n):
-        smooth_noise[i] = 0.6 * smooth_noise[i-1] + 0.4 * signal_noise[i]
+    # Add significant noise - Axiom is helpful but not perfect
+    detection_noise = np.random.normal(0, 12, weeks)
     
-    axiom_score = axiom_base + smooth_noise
+    # Autocorrelated noise (smooth transitions)
+    smooth_noise = np.zeros(weeks)
+    smooth_noise[0] = detection_noise[0]
+    for i in range(1, weeks):
+        smooth_noise[i] = 0.5 * smooth_noise[i-1] + 0.5 * detection_noise[i]
     
-    # Occasional false positives/negatives (real-world imperfection)
-    anomaly_weeks = np.random.choice(n, size=int(n * 0.08), replace=False)
-    for week in anomaly_weeks:
-        axiom_score[week] += np.random.uniform(-15, 15)
+    axiom_score = base_signal + smooth_noise
+    
+    # False positives/negatives (Axiom makes mistakes)
+    np.random.seed(888)
+    false_positive_weeks = np.random.choice(weeks, size=int(weeks * 0.06), replace=False)
+    for week in false_positive_weeks:
+        axiom_score[week] += np.random.uniform(10, 25)  # False alarm
+    
+    false_negative_weeks = np.random.choice(weeks, size=int(weeks * 0.04), replace=False)
+    for week in false_negative_weeks:
+        axiom_score[week] -= np.random.uniform(10, 20)  # Missed signal
     
     axiom_score = np.clip(axiom_score, 15, 98)
     axiom_score = np.round(axiom_score, 1)
@@ -186,32 +221,34 @@ def generate_axiom_ray_score(df, lead_weeks=2):
     return axiom_score
 
 
-def generate_signal_components(df):
+def generate_signal_components(df, factors):
     """Generate individual signal components that make up Axiom Ray score."""
     np.random.seed(456)
     
     n = len(df)
-    volume = np.array(df['y'])
     axiom = np.array(df['axiom_ray_score'])
     
-    # Social sentiment (most reactive, 1 week lead)
-    social = 0.3 * axiom + np.random.normal(50, 10, n)
+    # These are the sub-signals that Axiom aggregates
+    # They correlate with axiom but have their own noise
+    
+    # Social sentiment (most reactive)
+    social = 0.4 * axiom + 0.6 * np.random.uniform(30, 70, n)
     social = np.clip(social, 10, 100).round(1)
     
-    # Review trend (2 week lead, matches axiom closely)
-    review = 0.4 * axiom + np.random.normal(30, 8, n)
+    # Review trend
+    review = 0.35 * axiom + 0.65 * np.random.uniform(25, 75, n)
     review = np.clip(review, 10, 100).round(1)
     
-    # Warranty claims (3 week lead, lagged)
-    warranty = np.roll(axiom, 1) * 0.35 + np.random.normal(40, 12, n)
+    # Warranty claims (lagged slightly)
+    warranty = 0.3 * np.roll(axiom, 1) + 0.7 * np.random.uniform(30, 70, n)
     warranty = np.clip(warranty, 10, 100).round(1)
     
     # Search trends
-    search = 0.25 * axiom + np.random.normal(45, 10, n)
+    search = 0.3 * axiom + 0.7 * np.random.uniform(35, 65, n)
     search = np.clip(search, 10, 100).round(1)
     
     # Retail alerts
-    retail = 0.2 * axiom + np.random.normal(50, 15, n)
+    retail = 0.25 * axiom + 0.75 * np.random.uniform(40, 60, n)
     retail = np.clip(retail, 10, 100).round(1)
     
     return social, review, warranty, search, retail
@@ -220,14 +257,15 @@ def generate_signal_components(df):
 def create_combined_dataset():
     """Create the full dataset with all features."""
     
-    # Generate base volume data
-    df = generate_call_volume_data(start_date='2021-01-04', weeks=156)
+    # Generate volume data and underlying factors
+    df, factors = generate_call_volume_data(start_date='2021-01-04', weeks=156)
     
-    # Generate Axiom Ray score (leading indicator)
-    df['axiom_ray_score'] = generate_axiom_ray_score(df, lead_weeks=2)
+    # Generate Axiom Ray score (from factors, NOT from volume!)
+    dates = df['ds']
+    df['axiom_ray_score'] = generate_axiom_ray_score(len(df), dates, factors, lead_weeks=2)
     
     # Generate signal components
-    social, review, warranty, search, retail = generate_signal_components(df)
+    social, review, warranty, search, retail = generate_signal_components(df, factors)
     df['social_sentiment'] = social
     df['review_trend'] = review
     df['warranty_claims'] = warranty
@@ -238,7 +276,7 @@ def create_combined_dataset():
 
 
 def validate_leading_indicator(df, lead_weeks=2):
-    """Validate that axiom_ray_score is indeed a leading indicator."""
+    """Validate that axiom_ray_score is a useful leading indicator without leakage."""
     
     volume = np.array(df['y'])
     axiom = np.array(df['axiom_ray_score'])
@@ -252,19 +290,26 @@ def validate_leading_indicator(df, lead_weeks=2):
     # Lagging correlation (for comparison)
     lagging_corr = np.corrcoef(volume[:-lead_weeks], axiom[lead_weeks:])[0, 1]
     
-    print("=" * 50)
-    print("AXIOM RAY LEADING INDICATOR VALIDATION")
-    print("=" * 50)
+    print("=" * 60)
+    print("AXIOM RAY LEADING INDICATOR VALIDATION (NO DATA LEAKAGE)")
+    print("=" * 60)
     print(f"Concurrent correlation:  {concurrent_corr:.3f}")
-    print(f"Leading correlation:     {leading_corr:.3f} (axiom[t] → volume[t+{lead_weeks}])")
+    print(f"Leading correlation:     {leading_corr:.3f} (axiom[t] -> volume[t+{lead_weeks}])")
     print(f"Lagging correlation:     {lagging_corr:.3f}")
     print()
     
-    if leading_corr > concurrent_corr and leading_corr > lagging_corr:
-        print("SUCCESS: Axiom Ray IS a leading indicator!")
+    # Check for data leakage
+    if leading_corr > 0.9:
+        print("WARNING: Leading correlation > 0.9 suggests possible data leakage!")
+    elif leading_corr > concurrent_corr:
+        print("GOOD: Axiom Ray IS a leading indicator (leading > concurrent)")
     else:
-        print("WARNING: Leading correlation should be highest")
+        print("NOTE: Leading correlation not stronger than concurrent")
     
+    print()
+    print("Expected realistic values:")
+    print("  - Concurrent: 0.4-0.6 (moderate same-time correlation)")
+    print("  - Leading: 0.5-0.7 (useful but imperfect prediction)")
     print()
     print("Data Summary:")
     print(f"  Total weeks: {len(df)}")
