@@ -401,6 +401,16 @@ def main():
     future_forecast_baseline = forecaster_baseline.forecast_future(periods=forecast_periods)
     metrics_baseline, eval_df_baseline = forecaster_baseline.evaluate(test_df)
     
+    # Generate forecasts for all models (for visualization)
+    all_model_forecasts = {}
+    for key, result in all_models.items():
+        model = result['model']
+        all_model_forecasts[key] = {
+            'name': result['name'],
+            'forecast': result['forecast'],
+            'metrics': result['metrics']
+        }
+    
     # Tabs - Added Executive Summary first for VP presentation
     tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "Executive Summary", 
@@ -563,30 +573,37 @@ RECOMMENDATIONS:
             )
     
     with tab1:
-        st.header("Forecast Comparison: With vs Without Axiom Ray")
-        st.markdown("**Compare the forecasting accuracy with and without using Axiom Ray as a leading indicator.**")
+        st.header("Multi-Model Forecast Comparison")
+        st.markdown("**Compare all forecasting models: SARIMAX, Holt-Winters, and Ensemble**")
         
-        # Model comparison metrics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            mape_improvement = metrics_baseline['MAPE'] - metrics['MAPE']
-            st.metric("Baseline MAPE", f"{metrics_baseline['MAPE']:.1f}%", 
-                     delta=f"Without Axiom Ray", delta_color="off")
-        with col2:
-            st.metric("Enhanced MAPE", f"{metrics['MAPE']:.1f}%", 
-                     delta=f"{-mape_improvement:.1f}% better", delta_color="normal")
-        with col3:
-            mae_improvement = metrics_baseline['MAE'] - metrics['MAE']
-            st.metric("MAE Improvement", f"{mae_improvement:.0f} calls",
-                     delta=f"{(mae_improvement/metrics_baseline['MAE']*100):.1f}% reduction")
-        with col4:
-            accuracy_enhanced = 100 - metrics['MAPE']
-            st.metric("Enhanced Accuracy", f"{accuracy_enhanced:.1f}%",
-                     delta="With Axiom Ray")
+        # Model comparison metrics - show all 4 models
+        st.subheader("Model Performance Summary")
+        
+        model_colors = {
+            'sarimax_baseline': '#ff7f0e',  # Orange
+            'sarimax_axiom': '#2ca02c',      # Green
+            'holtwinters': '#9467bd',        # Purple
+            'ensemble': '#d62728'            # Red
+        }
+        
+        # Metrics cards for each model
+        cols = st.columns(4)
+        for i, (key, data) in enumerate(all_model_forecasts.items()):
+            with cols[i]:
+                mape = data['metrics']['MAPE']
+                mae = data['metrics']['MAE']
+                accuracy = 100 - mape
+                st.metric(
+                    data['name'], 
+                    f"{accuracy:.1f}% accurate",
+                    delta=f"MAPE: {mape:.1f}%",
+                    delta_color="off"
+                )
+                st.caption(f"MAE: {mae:.0f} calls")
         
         st.markdown("---")
         
-        # Comparison chart
+        # Multi-model comparison chart
         fig = go.Figure()
         
         # Historical data
@@ -596,79 +613,91 @@ RECOMMENDATIONS:
             mode='lines'
         ))
         
-        # Baseline forecast (without Axiom Ray)
-        fig.add_trace(go.Scatter(
-            x=future_forecast_baseline['ds'], y=future_forecast_baseline['yhat'],
-            name='Baseline Forecast (No Axiom Ray)', 
-            line=dict(color='#ff7f0e', width=2, dash='dash'),
-            mode='lines'
-        ))
+        # Add each model's forecast
+        line_styles = {
+            'sarimax_baseline': {'dash': 'dash', 'width': 2},
+            'sarimax_axiom': {'dash': 'solid', 'width': 2},
+            'holtwinters': {'dash': 'dot', 'width': 2},
+            'ensemble': {'dash': 'solid', 'width': 3}
+        }
         
-        # Enhanced forecast (with Axiom Ray)
-        fig.add_trace(go.Scatter(
-            x=future_forecast['ds'], y=future_forecast['yhat'],
-            name='Enhanced Forecast (With Axiom Ray)', 
-            line=dict(color='#2ca02c', width=3),
-            mode='lines'
-        ))
+        for key, data in all_model_forecasts.items():
+            forecast = data['forecast']
+            style = line_styles.get(key, {'dash': 'solid', 'width': 2})
+            fig.add_trace(go.Scatter(
+                x=forecast['ds'], y=forecast['yhat'],
+                name=data['name'],
+                line=dict(color=model_colors.get(key, '#888888'), **style),
+                mode='lines'
+            ))
         
-        # Confidence interval for enhanced
-        fig.add_trace(go.Scatter(
-            x=future_forecast['ds'], y=future_forecast['yhat_upper'],
-            name='Upper Bound', line=dict(width=0), mode='lines', showlegend=False
-        ))
-        fig.add_trace(go.Scatter(
-            x=future_forecast['ds'], y=future_forecast['yhat_lower'],
-            name='Confidence Interval', line=dict(width=0), mode='lines',
-            fill='tonexty', fillcolor='rgba(44, 160, 44, 0.2)'
-        ))
+        # Add confidence interval for ensemble (primary model)
+        if 'ensemble' in all_model_forecasts:
+            ensemble_forecast = all_model_forecasts['ensemble']['forecast']
+            fig.add_trace(go.Scatter(
+                x=ensemble_forecast['ds'], y=ensemble_forecast['yhat_upper'],
+                name='Upper Bound', line=dict(width=0), mode='lines', showlegend=False
+            ))
+            fig.add_trace(go.Scatter(
+                x=ensemble_forecast['ds'], y=ensemble_forecast['yhat_lower'],
+                name='Ensemble CI', line=dict(width=0), mode='lines',
+                fill='tonexty', fillcolor='rgba(214, 39, 40, 0.15)'
+            ))
         
         fig.update_layout(
-            title=f"Forecast Comparison - Next {forecast_periods} Weeks",
+            title=f"Multi-Model Forecast Comparison - Next {forecast_periods} Weeks",
             xaxis_title="Date",
             yaxis_title="Call Volume",
-            height=500,
+            height=550,
             hovermode='x unified',
             legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Side-by-side forecast tables
+        # Detailed comparison table
+        st.subheader("Forecast Values by Model")
+        
+        # Build comparison dataframe
+        comparison_data = {'Date': all_model_forecasts['sarimax_baseline']['forecast']['ds'].dt.strftime('%Y-%m-%d')}
+        for key, data in all_model_forecasts.items():
+            comparison_data[data['name']] = data['forecast']['yhat'].round(0).astype(int)
+        
+        comparison_df = pd.DataFrame(comparison_data)
+        st.dataframe(comparison_df, use_container_width=True, height=350)
+        
+        # Model insights
+        st.markdown("---")
+        st.subheader("Model Insights")
+        
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Baseline Forecast (No Axiom Ray)")
-            baseline_table = pd.DataFrame({
-                'Date': future_forecast_baseline['ds'].dt.strftime('%Y-%m-%d'),
-                'Forecast': future_forecast_baseline['yhat'].round(0).astype(int)
-            })
-            st.dataframe(baseline_table, use_container_width=True, height=300)
+            st.markdown("""
+            **Model Descriptions:**
+            
+            | Model | Technique | Key Feature |
+            |-------|-----------|-------------|
+            | SARIMAX Baseline | Seasonal ARIMA | Trend + Seasonality only |
+            | SARIMAX + Axiom Ray | SARIMAX w/ Exogenous | 2-week leading indicator |
+            | Holt-Winters | Triple Exp. Smoothing | Adaptive trend/seasonality |
+            | Ensemble | Weighted Average | Best of both worlds |
+            """)
         
         with col2:
-            st.subheader("Enhanced Forecast (With Axiom Ray)")
-            enhanced_table = pd.DataFrame({
-                'Date': future_forecast['ds'].dt.strftime('%Y-%m-%d'),
-                'Forecast': future_forecast['yhat'].round(0).astype(int),
-                'Difference': (future_forecast['yhat'] - future_forecast_baseline['yhat']).round(0).astype(int)
-            })
-            st.dataframe(enhanced_table, use_container_width=True, height=300)
+            st.markdown("""
+            **Axiom Ray Leading Indicator Sources:**
+            
+            | Signal | What It Detects | Lead Time |
+            |--------|-----------------|-----------|
+            | Social Media | Complaints & viral issues | 1-2 weeks |
+            | Product Reviews | Rating drops | 1-3 weeks |
+            | Warranty Claims | Defect patterns | 2-4 weeks |
+            | Search Trends | "Not working" queries | 1-2 weeks |
+            """)
         
-        # Why Axiom Ray helps
-        st.markdown("---")
-        st.subheader("Why Axiom Ray Improves Forecasting")
-        st.markdown("""
-        **Axiom Ray is a 2-week leading indicator** that detects support volume changes before they happen:
-        
-        | Signal Source | What It Detects | Lead Time |
-        |--------------|-----------------|-----------|
-        | Social Media | Customer complaints & viral issues | 1-2 weeks |
-        | Product Reviews | Rating drops & negative sentiment | 1-3 weeks |
-        | Warranty Claims | Defect patterns & returns | 2-4 weeks |
-        | Search Trends | "Product X not working" queries | 1-2 weeks |
-        
-        By incorporating these early warning signals, the forecast can anticipate volume spikes 
-        **before** they occur, enabling proactive staffing adjustments.
-        """)
+        # Best model recommendation
+        best_model_key = min(all_model_forecasts.items(), key=lambda x: x[1]['metrics']['MAPE'])
+        st.success(f"**Recommended Model:** {best_model_key[1]['name']} - achieves {100 - best_model_key[1]['metrics']['MAPE']:.1f}% accuracy on test data")
     
     # Scenario Planning Tab
     with tab2:
