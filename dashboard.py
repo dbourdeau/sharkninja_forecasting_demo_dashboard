@@ -1428,23 +1428,41 @@ RECOMMENDATIONS:
         try:
             # Generate daily data from weekly - use last year for robust training (365 days)
             # This is plenty for deep learning models while keeping it manageable
-            days_back = min(365, len(df) * 7)  # Use up to 1 year, or all available if less
-            daily_df = generate_daily_data(df, days_back=days_back)
+            with st.spinner("Generating daily data from weekly data..."):
+                days_back = min(365, len(df) * 7)  # Use up to 1 year, or all available if less
+                daily_df = generate_daily_data(df, days_back=days_back)
             
             if daily_df is None or len(daily_df) == 0:
                 st.error("Failed to generate daily data. Please check the data generation process.")
                 st.stop()
             
             # Compare short-term models
-            short_term_results, daily_train, daily_test = compare_short_term_models(daily_df, test_days=5)
+            with st.spinner("Training short-term forecasting models (this may take a moment)..."):
+                try:
+                    short_term_results, daily_train, daily_test = compare_short_term_models(daily_df, test_days=5)
+                except Exception as e:
+                    st.error(f"Error during model comparison: {str(e)}")
+                    st.exception(e)
+                    # Create empty results but still try to show forecast
+                    short_term_results = {}
+                    daily_train = daily_df.iloc[:-5].copy()
+                    daily_test = daily_df.iloc[-5:].copy()
             
             # Show data split info
             st.info(f"**Data Split:** {len(daily_train):,} days training | {len(daily_test)} days test | Total: {len(daily_df):,} days")
             
+            # Check TensorFlow availability
+            try:
+                import tensorflow as tf
+                tf_status = "✅ Available"
+            except ImportError:
+                tf_status = "❌ Not available (LSTM & Neural Network models will be skipped)"
+            st.caption(f"TensorFlow status: {tf_status}")
+            
             # Model comparison metrics
             st.subheader("Short-Term Model Performance (5-Day Test)")
             
-            if short_term_results:
+            if short_term_results and len(short_term_results) > 0:
                 perf_data = []
                 for method, result in short_term_results.items():
                     m = result['metrics']
@@ -1462,8 +1480,22 @@ RECOMMENDATIONS:
                 # Best model
                 best_model = min(short_term_results.items(), key=lambda x: x[1]['metrics']['MAPE'])
                 st.success(f"**Best Short-Term Model:** {best_model[1]['name']} with {100 - best_model[1]['metrics']['MAPE']:.1f}% accuracy")
+                
+                # Show which models are available
+                model_names = [result['name'] for result in short_term_results.values()]
+                st.caption(f"Models available: {', '.join(model_names)}")
             else:
-                st.warning("No models were successfully trained. This may be due to insufficient data or model errors.")
+                st.warning("⚠️ No models were successfully trained. This may be due to:")
+                st.markdown("""
+                - Insufficient training data
+                - TensorFlow/keras not available (LSTM and Neural Network models)
+                - Model training errors
+                """)
+                # Try to show what we have
+                if len(daily_df) < 14:
+                    st.error(f"Insufficient data: Only {len(daily_df)} days available. Need at least 14 days.")
+                else:
+                    st.info("Attempting to generate forecast with basic models...")
             
             st.markdown("---")
             
@@ -1474,12 +1506,27 @@ RECOMMENDATIONS:
             st.info(f"**Training Data:** {len(daily_df):,} days of historical data used for model training")
             
             # Use ensemble model for forecast
-            ensemble_model = ShortTermForecaster(method='ensemble')
-            ensemble_model.fit(daily_df)
-            forecast_5day = ensemble_model.forecast(days=5)
+            with st.spinner("Generating 5-day forecast..."):
+                try:
+                    ensemble_model = ShortTermForecaster(method='ensemble')
+                    ensemble_model.fit(daily_df)
+                    forecast_5day = ensemble_model.forecast(days=5)
+                    
+                    if forecast_5day is None or len(forecast_5day) == 0:
+                        st.error("Failed to generate forecast. Trying fallback model...")
+                        # Fallback to simple model
+                        fallback_model = ShortTermForecaster(method='dow_avg')
+                        fallback_model.fit(daily_df)
+                        forecast_5day = fallback_model.forecast(days=5)
+                except Exception as e:
+                    st.warning(f"Ensemble model failed: {str(e)}. Using fallback...")
+                    # Fallback to simple model
+                    fallback_model = ShortTermForecaster(method='dow_avg')
+                    fallback_model.fit(daily_df)
+                    forecast_5day = fallback_model.forecast(days=5)
             
             if forecast_5day is None or len(forecast_5day) == 0:
-                st.error("Failed to generate forecast. Please check the model training.")
+                st.error("Failed to generate forecast with all models.")
                 st.stop()
             
             # Forecast chart - show last 90 days for context
