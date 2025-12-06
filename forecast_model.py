@@ -4,13 +4,16 @@ Robust Multi-Model Forecasting with Trend and Seasonality
 Models available:
 1. SARIMAX with Axiom Ray as exogenous leading indicator
 2. Holt-Winters Triple Exponential Smoothing (trend + seasonality)
-3. Ensemble: Weighted average with trend continuation
+3. LSTM (Long Short-Term Memory) - Deep learning for sequential patterns
+4. Neural Network (MLP) - Feedforward network with features
+5. Ensemble: Weighted average with trend continuation
 
 Key improvements for robust forecasting:
 - Explicit trend detection and projection
 - Multiple seasonal period testing
 - Automatic model selection based on fit
 - Trend-adjusted ensemble weighting
+- Deep learning models for complex patterns
 """
 
 import pandas as pd
@@ -19,8 +22,19 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import MinMaxScaler
 import warnings
 warnings.filterwarnings('ignore')
+
+# Try to import TensorFlow for neural networks
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.callbacks import EarlyStopping
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
 
 
 def detect_trend(y, return_slope=False):
@@ -348,18 +362,282 @@ class HoltWintersForecaster:
         })
 
 
+class LSTMForecaster:
+    """LSTM neural network for weekly time series forecasting."""
+    
+    def __init__(self):
+        self.model = None
+        self.scaler = None
+        self.training_data = None
+        self.last_train_date = None
+        self.sequence_length = 13  # Use 13 weeks (quarter) to predict next week
+        self.name = "LSTM (Deep Learning)"
+        
+    def fit(self, df):
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("Input must be a pandas DataFrame")
+        
+        if not TENSORFLOW_AVAILABLE:
+            raise ValueError("TensorFlow not available")
+        
+        df = df.copy()
+        if not pd.api.types.is_datetime64_any_dtype(df['ds']):
+            df['ds'] = pd.to_datetime(df['ds'])
+        
+        df = df.sort_values('ds').reset_index(drop=True)
+        self.training_data = df.copy()
+        self.last_train_date = df['ds'].max()
+        
+        y = np.array(df['y']).astype(float)
+        n = len(y)
+        
+        if n < self.sequence_length + 5:
+            raise ValueError(f"Need at least {self.sequence_length + 5} weeks of data")
+        
+        # Normalize
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
+        y_scaled = self.scaler.fit_transform(y.reshape(-1, 1)).flatten()
+        
+        # Create sequences
+        X, y_seq = [], []
+        for i in range(self.sequence_length, n):
+            X.append(y_scaled[i-self.sequence_length:i])
+            y_seq.append(y_scaled[i])
+        
+        X = np.array(X)
+        y_seq = np.array(y_seq)
+        X = X.reshape((X.shape[0], X.shape[1], 1))
+        
+        # Build LSTM model
+        self.model = Sequential([
+            LSTM(50, activation='relu', return_sequences=True, input_shape=(self.sequence_length, 1)),
+            Dropout(0.2),
+            LSTM(50, activation='relu', return_sequences=False),
+            Dropout(0.2),
+            Dense(1)
+        ])
+        
+        self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        
+        # Train
+        early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
+        self.model.fit(X, y_seq, epochs=50, batch_size=min(16, len(X)//2),
+                      verbose=0, callbacks=[early_stop], validation_split=0.2)
+        
+        return self
+    
+    def forecast(self, periods, future_exog=None):
+        if self.model is None or self.scaler is None:
+            raise ValueError("Model must be fitted first")
+        
+        n_train = len(self.training_data)
+        y = np.array(self.training_data['y']).astype(float)
+        y_scaled = self.scaler.transform(y.reshape(-1, 1)).flatten()
+        
+        future_dates = pd.date_range(
+            start=self.last_train_date + pd.Timedelta(days=7),
+            periods=periods, freq='W-MON'
+        )
+        
+        # Start with last sequence
+        last_sequence = y_scaled[-self.sequence_length:].reshape(1, self.sequence_length, 1)
+        
+        forecasts = []
+        current_sequence = last_sequence.copy()
+        
+        for _ in range(periods):
+            next_pred = self.model.predict(current_sequence, verbose=0)[0, 0]
+            forecasts.append(next_pred)
+            # Update sequence
+            current_sequence = np.roll(current_sequence, -1, axis=1)
+            current_sequence[0, -1, 0] = next_pred
+        
+        # Inverse transform
+        forecasts = np.array(forecasts).reshape(-1, 1)
+        forecasts = self.scaler.inverse_transform(forecasts).flatten()
+        
+        # Confidence intervals
+        residuals = y - self.scaler.inverse_transform(
+            self.model.predict(self.scaler.transform(y.reshape(-1, 1))[self.sequence_length-1:], verbose=0)
+        ).flatten()[:len(y) - self.sequence_length + 1]
+        std_resid = np.std(residuals) if len(residuals) > 0 else np.std(y) * 0.15
+        
+        ci_width = 1.96 * std_resid * np.sqrt(1 + np.arange(periods) * 0.05)
+        yhat_lower = forecasts - ci_width
+        yhat_upper = forecasts + ci_width
+        
+        forecasts = np.maximum(forecasts, 100)
+        yhat_lower = np.maximum(yhat_lower, 50)
+        yhat_upper = np.maximum(yhat_upper, forecasts)
+        
+        return pd.DataFrame({
+            'ds': future_dates,
+            'yhat': forecasts,
+            'yhat_lower': yhat_lower,
+            'yhat_upper': yhat_upper
+        })
+
+
+class NeuralNetworkForecaster:
+    """Feedforward neural network for weekly time series forecasting."""
+    
+    def __init__(self):
+        self.model = None
+        self.scaler = None
+        self.target_scaler = None
+        self.training_data = None
+        self.last_train_date = None
+        self.feature_length = 13  # Use 13 weeks of lagged values
+        self.name = "Neural Network (MLP)"
+        
+    def fit(self, df):
+        if not isinstance(df, pd.DataFrame):
+            raise ValueError("Input must be a pandas DataFrame")
+        
+        if not TENSORFLOW_AVAILABLE:
+            raise ValueError("TensorFlow not available")
+        
+        df = df.copy()
+        if not pd.api.types.is_datetime64_any_dtype(df['ds']):
+            df['ds'] = pd.to_datetime(df['ds'])
+        
+        df = df.sort_values('ds').reset_index(drop=True)
+        self.training_data = df.copy()
+        self.last_train_date = df['ds'].max()
+        
+        y = np.array(df['y']).astype(float)
+        n = len(y)
+        
+        if n < self.feature_length + 5:
+            raise ValueError(f"Need at least {self.feature_length + 5} weeks of data")
+        
+        # Create features
+        X_list = []
+        y_list = []
+        
+        for i in range(self.feature_length, n):
+            # Lagged values
+            lag_features = y[i-self.feature_length:i]
+            
+            # Week of year (seasonal)
+            week_of_year = pd.to_datetime(df['ds'].iloc[i]).isocalendar()[1] / 52.0
+            seasonal_feature = np.sin(2 * np.pi * week_of_year)
+            seasonal_feature2 = np.cos(2 * np.pi * week_of_year)
+            
+            # Trend
+            trend = (i - self.feature_length) / n
+            
+            # Combine features
+            features = np.concatenate([
+                lag_features,
+                [seasonal_feature, seasonal_feature2, trend]
+            ])
+            
+            X_list.append(features)
+            y_list.append(y[i])
+        
+        X = np.array(X_list)
+        y_seq = np.array(y_list)
+        
+        # Normalize
+        self.scaler = MinMaxScaler()
+        X_scaled = self.scaler.fit_transform(X)
+        
+        self.target_scaler = {'mean': y_seq.mean(), 'std': y_seq.std()}
+        y_scaled = (y_seq - self.target_scaler['mean']) / (self.target_scaler['std'] + 1e-8)
+        
+        # Build model
+        self.model = Sequential([
+            Dense(64, activation='relu', input_shape=(X_scaled.shape[1],)),
+            Dropout(0.3),
+            Dense(32, activation='relu'),
+            Dropout(0.2),
+            Dense(16, activation='relu'),
+            Dense(1)
+        ])
+        
+        self.model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        
+        early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
+        self.model.fit(X_scaled, y_scaled, epochs=50, batch_size=min(16, len(X)//2),
+                      verbose=0, callbacks=[early_stop], validation_split=0.2)
+        
+        return self
+    
+    def forecast(self, periods, future_exog=None):
+        if self.model is None or self.scaler is None:
+            raise ValueError("Model must be fitted first")
+        
+        n_train = len(self.training_data)
+        y = np.array(self.training_data['y']).astype(float)
+        
+        future_dates = pd.date_range(
+            start=self.last_train_date + pd.Timedelta(days=7),
+            periods=periods, freq='W-MON'
+        )
+        
+        forecasts = []
+        last_y = y[-self.feature_length:].tolist()
+        
+        for i in range(periods):
+            # Features
+            lag_features = np.array(last_y[-self.feature_length:])
+            
+            forecast_date = future_dates[i]
+            week_of_year = forecast_date.isocalendar()[1] / 52.0
+            seasonal_feature = np.sin(2 * np.pi * week_of_year)
+            seasonal_feature2 = np.cos(2 * np.pi * week_of_year)
+            trend = (n_train + i) / (n_train + periods)
+            
+            features = np.concatenate([lag_features, [seasonal_feature, seasonal_feature2, trend]]).reshape(1, -1)
+            
+            # Scale and predict
+            features_scaled = self.scaler.transform(features)
+            pred_scaled = self.model.predict(features_scaled, verbose=0)[0, 0]
+            
+            # Inverse transform
+            pred = pred_scaled * self.target_scaler['std'] + self.target_scaler['mean']
+            forecasts.append(max(pred, 100))
+            
+            # Update
+            last_y.append(pred)
+            if len(last_y) > self.feature_length * 2:
+                last_y = last_y[-self.feature_length * 2:]
+        
+        forecasts = np.array(forecasts)
+        
+        # Confidence intervals
+        std_resid = self.target_scaler['std'] * 0.15
+        ci_width = 1.96 * std_resid * np.sqrt(1 + np.arange(periods) * 0.05)
+        yhat_lower = forecasts - ci_width
+        yhat_upper = forecasts + ci_width
+        
+        forecasts = np.maximum(forecasts, 100)
+        yhat_lower = np.maximum(yhat_lower, 50)
+        yhat_upper = np.maximum(yhat_upper, forecasts)
+        
+        return pd.DataFrame({
+            'ds': future_dates,
+            'yhat': forecasts,
+            'yhat_lower': yhat_lower,
+            'yhat_upper': yhat_upper
+        })
+
+
 class EnsembleForecaster:
     """Smart ensemble that combines models based on their strengths."""
     
     def __init__(self, weights=None):
         self.sarimax = SARIMAXForecaster(use_exogenous=True)
         self.holtwinters = HoltWintersForecaster()
+        self.lstm = None
+        self.nn = None
         self.weights = weights or {'sarimax': 0.5, 'holtwinters': 0.5}
         self.training_data = None
         self.last_train_date = None
         self.trend_slope = 0
         self.trend_intercept = 0
-        self.name = "Ensemble (SARIMAX + Holt-Winters)"
+        self.name = "Ensemble"
         self.model_performance = {}
         
     def fit(self, df):
@@ -377,9 +655,23 @@ class EnsembleForecaster:
         y = np.array(df['y'])
         _, self.trend_slope, self.trend_intercept = detect_trend(y, return_slope=True)
         
-        # Fit both models
+        # Fit base models
         self.sarimax.fit(df)
         self.holtwinters.fit(df)
+        
+        # Try to fit neural network models if TensorFlow available
+        if TENSORFLOW_AVAILABLE and len(df) >= 30:
+            try:
+                self.lstm = LSTMForecaster()
+                self.lstm.fit(df)
+            except Exception:
+                self.lstm = None
+            
+            try:
+                self.nn = NeuralNetworkForecaster()
+                self.nn.fit(df)
+            except Exception:
+                self.nn = None
         
         # Cross-validation to determine weights
         n = len(df)
@@ -389,6 +681,8 @@ class EnsembleForecaster:
         
         sarimax_mape = 50
         hw_mape = 50
+        lstm_mape = 50
+        nn_mape = 50
         
         try:
             sarimax_cv = SARIMAXForecaster(use_exogenous=True)
@@ -408,17 +702,57 @@ class EnsembleForecaster:
         except Exception:
             pass
         
+        if TENSORFLOW_AVAILABLE:
+            try:
+                lstm_cv = LSTMForecaster()
+                lstm_cv.fit(train_cv)
+                lstm_pred = lstm_cv.forecast(val_size)
+                actual = np.array(val_cv['y'])
+                lstm_mape = np.mean(np.abs((actual - np.array(lstm_pred['yhat'])) / np.maximum(actual, 1))) * 100
+            except Exception:
+                pass
+            
+            try:
+                nn_cv = NeuralNetworkForecaster()
+                nn_cv.fit(train_cv)
+                nn_pred = nn_cv.forecast(val_size)
+                actual = np.array(val_cv['y'])
+                nn_mape = np.mean(np.abs((actual - np.array(nn_pred['yhat'])) / np.maximum(actual, 1))) * 100
+            except Exception:
+                pass
+        
         self.model_performance = {
             'sarimax_mape': sarimax_mape,
-            'holtwinters_mape': hw_mape
+            'holtwinters_mape': hw_mape,
+            'lstm_mape': lstm_mape if self.lstm else None,
+            'nn_mape': nn_mape if self.nn else None
         }
         
-        # Weights inversely proportional to error
-        total_inv_error = (1 / max(sarimax_mape, 1)) + (1 / max(hw_mape, 1))
-        self.weights = {
-            'sarimax': (1 / max(sarimax_mape, 1)) / total_inv_error,
-            'holtwinters': (1 / max(hw_mape, 1)) / total_inv_error
+        # Calculate weights (inversely proportional to error)
+        weights_dict = {
+            'sarimax': 1 / max(sarimax_mape, 1),
+            'holtwinters': 1 / max(hw_mape, 1)
         }
+        
+        if self.lstm:
+            weights_dict['lstm'] = 1 / max(lstm_mape, 1)
+        if self.nn:
+            weights_dict['nn'] = 1 / max(nn_mape, 1)
+        
+        total_inv_error = sum(weights_dict.values())
+        self.weights = {k: v / total_inv_error for k, v in weights_dict.items()}
+        
+        # Update name
+        model_names = []
+        if 'sarimax' in self.weights:
+            model_names.append('SARIMAX')
+        if 'holtwinters' in self.weights:
+            model_names.append('Holt-Winters')
+        if 'lstm' in self.weights:
+            model_names.append('LSTM')
+        if 'nn' in self.weights:
+            model_names.append('NN')
+        self.name = f"Ensemble ({'+'.join(model_names)})"
         
         return self
     
@@ -426,12 +760,34 @@ class EnsembleForecaster:
         sarimax_forecast = self.sarimax.forecast(periods, future_exog)
         hw_forecast = self.holtwinters.forecast(periods)
         
-        w_s = self.weights['sarimax']
-        w_h = self.weights['holtwinters']
+        yhat = (self.weights.get('sarimax', 0) * np.array(sarimax_forecast['yhat']) +
+                self.weights.get('holtwinters', 0) * np.array(hw_forecast['yhat']))
+        yhat_lower = (self.weights.get('sarimax', 0) * np.array(sarimax_forecast['yhat_lower']) +
+                      self.weights.get('holtwinters', 0) * np.array(hw_forecast['yhat_lower']))
+        yhat_upper = (self.weights.get('sarimax', 0) * np.array(sarimax_forecast['yhat_upper']) +
+                      self.weights.get('holtwinters', 0) * np.array(hw_forecast['yhat_upper']))
         
-        yhat = w_s * np.array(sarimax_forecast['yhat']) + w_h * np.array(hw_forecast['yhat'])
-        yhat_lower = w_s * np.array(sarimax_forecast['yhat_lower']) + w_h * np.array(hw_forecast['yhat_lower'])
-        yhat_upper = w_s * np.array(sarimax_forecast['yhat_upper']) + w_h * np.array(hw_forecast['yhat_upper'])
+        # Add LSTM if available
+        if self.lstm and 'lstm' in self.weights:
+            try:
+                lstm_forecast = self.lstm.forecast(periods)
+                w_lstm = self.weights['lstm']
+                yhat += w_lstm * np.array(lstm_forecast['yhat'])
+                yhat_lower += w_lstm * np.array(lstm_forecast['yhat_lower'])
+                yhat_upper += w_lstm * np.array(lstm_forecast['yhat_upper'])
+            except Exception:
+                pass
+        
+        # Add Neural Network if available
+        if self.nn and 'nn' in self.weights:
+            try:
+                nn_forecast = self.nn.forecast(periods)
+                w_nn = self.weights['nn']
+                yhat += w_nn * np.array(nn_forecast['yhat'])
+                yhat_lower += w_nn * np.array(nn_forecast['yhat_lower'])
+                yhat_upper += w_nn * np.array(nn_forecast['yhat_upper'])
+            except Exception:
+                pass
         
         # Check for flat forecast and add trend if needed
         n_train = len(self.training_data)
@@ -469,6 +825,14 @@ class CallVolumeForecaster:
             self.model = SARIMAXForecaster(use_exogenous=False)
         elif model_type == 'holtwinters':
             self.model = HoltWintersForecaster()
+        elif model_type == 'lstm':
+            if not TENSORFLOW_AVAILABLE:
+                raise ValueError("TensorFlow not available for LSTM model")
+            self.model = LSTMForecaster()
+        elif model_type == 'nn':
+            if not TENSORFLOW_AVAILABLE:
+                raise ValueError("TensorFlow not available for Neural Network model")
+            self.model = NeuralNetworkForecaster()
         elif model_type == 'ensemble':
             self.model = EnsembleForecaster()
         else:
@@ -574,6 +938,13 @@ def compare_all_models(df_train, df_test, forecast_periods):
         ('holtwinters', 'Holt-Winters', {'model_type': 'holtwinters'}),
         ('ensemble', 'Ensemble', {'model_type': 'ensemble'}),
     ]
+    
+    # Add neural network models if TensorFlow available
+    if TENSORFLOW_AVAILABLE and len(df_train) >= 30:
+        model_configs.extend([
+            ('lstm', 'LSTM (Deep Learning)', {'model_type': 'lstm'}),
+            ('nn', 'Neural Network (MLP)', {'model_type': 'nn'}),
+        ])
     
     for key, name, kwargs in model_configs:
         try:
