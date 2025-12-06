@@ -1,0 +1,41 @@
+╔══════════════════════════════════════════════════════════════╗
+║         FIX: Disable Prophet Bundled Binary                   ║
+╚══════════════════════════════════════════════════════════════╝
+
+The error code 3221225781 happens because Prophet is using a
+bundled .bin file that crashes on Windows.
+
+SOLUTION: Disable the bundled binary so Prophet compiles instead.
+
+────────────────────────────────────────────────────────────────
+
+OPTION 1 - Run the fix script:
+───────────────────────────────
+   Double-click: disable_prophet_binary.bat
+
+   This will rename the bundled binary so Prophet can't use it.
+
+────────────────────────────────────────────────────────────────
+
+OPTION 2 - Manual fix (run as Administrator if needed):
+────────────────────────────────────────────────────────
+   python -c "import os, shutil; import prophet; p=os.path.dirname(prophet.__file__); b=os.path.join(p, 'stan_model', 'prophet_model.bin'); bk=b+'.backup'; os.path.exists(b) and not os.path.exists(bk) and shutil.move(b, bk)"
+
+────────────────────────────────────────────────────────────────
+
+After running the fix:
+──────────────────────
+1. Restart your dashboard:
+   python -m streamlit run dashboard.py
+
+2. Prophet will compile models using CmdStan (takes longer first time)
+
+────────────────────────────────────────────────────────────────
+
+The binary is at:
+C:\Users\dbour\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages\prophet\stan_model\prophet_model.bin
+
+It will be renamed to: prophet_model.bin.backup
+
+────────────────────────────────────────────────────────────────
+

@@ -1,0 +1,55 @@
+╔══════════════════════════════════════════════════════════════╗
+║              FIX PROPhet ERROR - QUICK FIX                    ║
+╚══════════════════════════════════════════════════════════════╝
+
+The error you got is because Prophet needs cmdstanpy backend.
+Here's the easiest fix:
+
+────────────────────────────────────────────────────────────────
+
+OPTION 1 - EASIEST (Windows):
+──────────────────────────────
+   Double-click: fix_prophet.bat
+
+   This will automatically:
+   ✓ Install cmdstanpy
+   ✓ Install CmdStan backend (takes 5-10 minutes)
+   ✓ Set everything up correctly
+
+────────────────────────────────────────────────────────────────
+
+OPTION 2 - Command Line:
+─────────────────────────
+   Run these commands one by one:
+
+   pip install cmdstanpy
+   python -c "import cmdstanpy; cmdstanpy.install_cmdstan()"
+
+────────────────────────────────────────────────────────────────
+
+OPTION 3 - Update Everything:
+──────────────────────────────
+   pip install --upgrade -r requirements.txt
+   pip install cmdstanpy
+   python -c "import cmdstanpy; cmdstanpy.install_cmdstan()"
+
+────────────────────────────────────────────────────────────────
+
+AFTER FIXING:
+─────────────
+1. Close your terminal/PowerShell
+2. Open a new one
+3. Go to project folder:
+   cd C:\Users\dbour\call_center_forecast_demo
+4. Run dashboard:
+   python -m streamlit run dashboard.py
+
+────────────────────────────────────────────────────────────────
+
+NOTE: CmdStan installation downloads ~100MB and takes 5-10 minutes.
+      Just wait for it to complete - this is normal!
+
+────────────────────────────────────────────────────────────────
+
+For more details, see: FIX_PROPHET_ERROR.md
+

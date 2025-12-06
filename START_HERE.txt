@@ -1,0 +1,29 @@
+╔══════════════════════════════════════════════════════════════╗
+║         RUN YOUR DASHBOARD LOCALLY - SIMPLE STEPS            ║
+╚══════════════════════════════════════════════════════════════╝
+
+OPTION 1 - EASIEST (Windows):
+─────────────────────────────
+   Just double-click: run_demo.bat
+
+OPTION 2 - Command Line:
+────────────────────────
+   streamlit run dashboard.py
+
+That's it! The dashboard will:
+  ✓ Auto-generate data if needed
+  ✓ Open in your browser at http://localhost:8501
+  ✓ Show your forecasting dashboard
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Need to install dependencies first?
+────────────────────────────────────
+   pip install -r requirements.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The dashboard will automatically generate data on first run,
+so you don't need to run generate_data.py separately!
+
+
