@@ -13,7 +13,14 @@ from plotly.subplots import make_subplots
 import sys
 
 from forecast_model import CallVolumeForecaster, train_test_split, compare_forecasts, compare_all_models
-from business_metrics import calculate_staffing_needs, calculate_costs, calculate_roi, identify_risk_periods
+from business_metrics import (
+    calculate_staffing_needs, 
+    calculate_costs, 
+    calculate_roi, 
+    identify_risk_periods,
+    calculate_service_quality_metrics,
+    calculate_budget_impact
+)
 from short_term_forecast import generate_daily_data, ShortTermForecaster, compare_short_term_models, get_staffing_recommendation
 
 # Page configuration
