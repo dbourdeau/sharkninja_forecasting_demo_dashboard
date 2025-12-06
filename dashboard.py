@@ -1538,8 +1538,8 @@ RECOMMENDATIONS:
             ))
             
             # Predictions from each model
-            colors = {'ses': '#ff7f0e', 'arima': '#2ca02c', 'dow_avg': '#9467bd'}
-            for method in ['ses', 'arima', 'dow_avg']:
+            colors = {'ses': '#ff7f0e', 'arima': '#2ca02c', 'dow_avg': '#9467bd', 'lstm': '#d62728'}
+            for method in ['ses', 'arima', 'dow_avg', 'lstm']:
                 if method in short_term_results:
                     pred_col = f'{method}_forecast'
                     if pred_col in eval_df.columns and eval_df[pred_col].notna().all():
@@ -1589,6 +1589,7 @@ RECOMMENDATIONS:
         - **Simple Exp. Smoothing**: Good for stable patterns
         - **ARIMA(2,0,1)**: Captures short-term dynamics
         - **Day-of-Week Average**: Uses historical day patterns
+        - **LSTM (Deep Learning)**: Industry-standard neural network for time series
         - **Ensemble**: Combines all methods for robustness
         """)
     

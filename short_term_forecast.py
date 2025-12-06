@@ -6,6 +6,7 @@ Uses different techniques optimized for short horizons:
 - Simple Exponential Smoothing
 - Moving Average with Day-of-Week patterns
 - ARIMA for short-term dynamics
+- LSTM (Long Short-Term Memory) - Deep learning approach
 """
 
 import pandas as pd
@@ -14,8 +15,19 @@ from datetime import datetime, timedelta
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing, ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
 import warnings
 warnings.filterwarnings('ignore')
+
+# Try to import TensorFlow for LSTM
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.callbacks import EarlyStopping
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
 
 
 def generate_daily_data(weekly_df, days_back=90):
@@ -91,12 +103,14 @@ class ShortTermForecaster:
     def __init__(self, method='ensemble'):
         """
         Args:
-            method: 'ses' (Simple Exp Smoothing), 'arima', 'dow_avg', or 'ensemble'
+            method: 'ses', 'arima', 'dow_avg', 'lstm', or 'ensemble'
         """
         self.method = method
         self.training_data = None
         self.dow_patterns = None
         self.models = {}
+        self.scaler = None
+        self.lstm_sequence_length = 7  # Use 7 days to predict next day
         
     def fit(self, daily_df):
         """Fit the short-term forecasting models."""
@@ -140,7 +154,93 @@ class ShortTermForecaster:
         except Exception:
             self.models['hw'] = None
         
+        # Fit LSTM (if TensorFlow available and enough data)
+        if TENSORFLOW_AVAILABLE and len(y) >= 21:  # Need at least 3 weeks
+            try:
+                lstm_model, scaler = self._fit_lstm(y)
+                self.models['lstm'] = lstm_model
+                self.scaler = scaler
+            except Exception as e:
+                self.models['lstm'] = None
+                self.scaler = None
+        else:
+            self.models['lstm'] = None
+            self.scaler = None
+        
         return self
+    
+    def _fit_lstm(self, y):
+        """Fit LSTM model on time series data."""
+        # Normalize data
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        y_scaled = scaler.fit_transform(y.reshape(-1, 1)).flatten()
+        
+        # Create sequences: use last 7 days to predict next day
+        sequence_length = self.lstm_sequence_length
+        X, y_seq = [], []
+        
+        for i in range(sequence_length, len(y_scaled)):
+            X.append(y_scaled[i-sequence_length:i])
+            y_seq.append(y_scaled[i])
+        
+        X = np.array(X)
+        y_seq = np.array(y_seq)
+        
+        # Reshape for LSTM: [samples, time steps, features]
+        X = X.reshape((X.shape[0], X.shape[1], 1))
+        
+        # Build LSTM model
+        model = Sequential([
+            LSTM(50, activation='relu', return_sequences=True, input_shape=(sequence_length, 1)),
+            Dropout(0.2),
+            LSTM(50, activation='relu', return_sequences=False),
+            Dropout(0.2),
+            Dense(1)
+        ])
+        
+        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        
+        # Early stopping to prevent overfitting
+        early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
+        
+        # Train with minimal epochs for small dataset
+        model.fit(X, y_seq, epochs=30, batch_size=min(16, len(X)//2), 
+                 verbose=0, callbacks=[early_stop], validation_split=0.2)
+        
+        return model, scaler
+    
+    def _forecast_lstm(self, days=5):
+        """Generate LSTM forecast."""
+        if self.models.get('lstm') is None or self.scaler is None:
+            return None
+        
+        model = self.models['lstm']
+        scaler = self.scaler
+        
+        # Get last sequence_length days
+        y = np.array(self.training_data['y']).astype(float)
+        y_scaled = scaler.transform(y.reshape(-1, 1)).flatten()
+        
+        # Start with last sequence
+        last_sequence = y_scaled[-self.lstm_sequence_length:].reshape(1, self.lstm_sequence_length, 1)
+        
+        forecasts = []
+        current_sequence = last_sequence.copy()
+        
+        for _ in range(days):
+            # Predict next value
+            next_pred = model.predict(current_sequence, verbose=0)[0, 0]
+            forecasts.append(next_pred)
+            
+            # Update sequence: remove first, add prediction
+            current_sequence = np.roll(current_sequence, -1, axis=1)
+            current_sequence[0, -1, 0] = next_pred
+        
+        # Inverse transform
+        forecasts = np.array(forecasts).reshape(-1, 1)
+        forecasts = scaler.inverse_transform(forecasts).flatten()
+        
+        return forecasts
     
     def forecast(self, days=5):
         """Generate forecast for next N days."""
@@ -174,9 +274,16 @@ class ShortTermForecaster:
             hw_forecast = self.models['hw'].forecast(days)
             forecasts['hw'] = np.array(hw_forecast)
         
-        # Ensemble: weighted average
+        # LSTM forecast
+        if self.models.get('lstm'):
+            lstm_forecast = self._forecast_lstm(days)
+            if lstm_forecast is not None:
+                forecasts['lstm'] = lstm_forecast
+        
+        # Ensemble: weighted average (LSTM gets higher weight if available)
         available_forecasts = [f for f in [forecasts.get('ses'), forecasts.get('arima'), 
-                                           forecasts.get('hw'), forecasts.get('dow_avg')] 
+                                           forecasts.get('hw'), forecasts.get('lstm'),
+                                           forecasts.get('dow_avg')] 
                              if f is not None]
         
         if available_forecasts:
@@ -209,6 +316,7 @@ class ShortTermForecaster:
         result_df['ses_forecast'] = forecasts.get('ses', forecasts['dow_avg']).round(0).astype(int) if 'ses' in forecasts else None
         result_df['arima_forecast'] = forecasts.get('arima', forecasts['dow_avg']).round(0).astype(int) if 'arima' in forecasts else None
         result_df['hw_forecast'] = forecasts.get('hw', forecasts['dow_avg']).round(0).astype(int) if 'hw' in forecasts else None
+        result_df['lstm_forecast'] = forecasts.get('lstm', forecasts['dow_avg']).round(0).astype(int) if 'lstm' in forecasts else None
         result_df['dow_forecast'] = forecasts['dow_avg'].round(0).astype(int)
         
         return result_df
@@ -262,7 +370,15 @@ def compare_short_term_models(daily_df, test_days=5):
     test_df = daily_df.iloc[-test_days:].copy()
     
     results = {}
-    methods = ['ses', 'arima', 'dow_avg', 'ensemble']
+    methods = ['ses', 'arima', 'dow_avg', 'lstm', 'ensemble']
+    
+    name_map = {
+        'ses': 'Simple Exp. Smoothing',
+        'arima': 'ARIMA(2,0,1)',
+        'dow_avg': 'Day-of-Week Average',
+        'lstm': 'LSTM (Deep Learning)',
+        'ensemble': 'Ensemble'
+    }
     
     for method in methods:
         try:
@@ -276,12 +392,7 @@ def compare_short_term_models(daily_df, test_days=5):
                 'metrics': metrics,
                 'eval_df': eval_df,
                 'forecast': forecast,
-                'name': {
-                    'ses': 'Simple Exp. Smoothing',
-                    'arima': 'ARIMA(2,0,1)',
-                    'dow_avg': 'Day-of-Week Average',
-                    'ensemble': 'Ensemble'
-                }[method]
+                'name': name_map.get(method, method)
             }
         except Exception as e:
             print(f"Method {method} failed: {e}")
