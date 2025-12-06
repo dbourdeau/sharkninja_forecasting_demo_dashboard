@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import sys
 
-from forecast_model import CallVolumeForecaster, train_test_split, compare_forecasts
+from forecast_model import CallVolumeForecaster, train_test_split, compare_forecasts, compare_all_models
 from business_metrics import calculate_staffing_needs, calculate_costs, calculate_roi, identify_risk_periods
 
 # Page configuration
@@ -307,52 +307,67 @@ def main():
         progress_bar.progress(progress)
     
     import time
-    with st.spinner("Training SARIMAX models (baseline and enhanced with Axiom Ray)..."):
+    with st.spinner("Training multiple forecasting models..."):
         try:
             update_status("Initializing models...", 10)
+            start_total = time.time()
             
-            # Train BASELINE model (without Axiom Ray)
-            update_status("Training BASELINE model (no Axiom Ray)...", 20)
-            start_time = time.time()
-            forecaster_baseline = CallVolumeForecaster(use_exogenous=False)
-            forecaster_baseline.fit(train_df)
-            baseline_time = time.time() - start_time
+            # Train all models and compare
+            update_status("Training SARIMAX (baseline)...", 20)
+            update_status("Training SARIMAX + Axiom Ray...", 35)
+            update_status("Training Holt-Winters...", 50)
+            update_status("Training Ensemble model...", 65)
             
-            # Train ENHANCED model (with Axiom Ray)
-            update_status("Training ENHANCED model (with Axiom Ray)...", 50)
-            start_time = time.time()
-            forecaster = CallVolumeForecaster(use_exogenous=True)
-            forecaster.fit(train_df)
-            enhanced_time = time.time() - start_time
+            all_models = compare_all_models(train_df, test_df, forecast_periods)
             
             update_status("Comparing model performance...", 80)
             
-            # Get comparison metrics
+            # Also get backward-compatible comparison
             comparison = compare_forecasts(train_df, test_df, forecast_periods)
             
-            total_time = baseline_time + enhanced_time
-            st.success(f"✓ **Both models trained in {total_time:.1f} seconds!**")
+            # Use ensemble as the primary forecaster
+            forecaster = all_models['ensemble']['model'] if 'ensemble' in all_models else all_models['sarimax_baseline']['model']
+            forecaster_baseline = all_models['sarimax_baseline']['model'] if 'sarimax_baseline' in all_models else forecaster
+            
+            total_time = time.time() - start_total
+            st.success(f"✓ **All models trained in {total_time:.1f} seconds!**")
             
             update_status("Model training complete! Generating forecasts...", 90)
             progress_bar.progress(100)
             
             # Show model comparison in expandable section
-            with st.expander("📊 Model Comparison & Diagnostics (click to view)", expanded=False):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**Baseline Model (No Axiom Ray)**")
-                    st.write(f"- MAPE: {comparison['baseline']['metrics']['MAPE']:.2f}%")
-                    st.write(f"- MAE: {comparison['baseline']['metrics']['MAE']:.1f}")
-                    st.write(f"- Training time: {baseline_time:.1f}s")
-                with col2:
-                    st.markdown("**Enhanced Model (With Axiom Ray)**")
-                    if 'enhanced' in comparison:
-                        st.write(f"- MAPE: {comparison['enhanced']['metrics']['MAPE']:.2f}%")
-                        st.write(f"- MAE: {comparison['enhanced']['metrics']['MAE']:.1f}")
-                        st.write(f"- Training time: {enhanced_time:.1f}s")
-                        st.markdown(f"**Improvement: {comparison['improvement']['MAPE_pct_improvement']:.1f}% better MAPE**")
-                    else:
-                        st.info("Axiom Ray data not available")
+            with st.expander("📊 Multi-Model Comparison & Diagnostics (click to view)", expanded=False):
+                st.markdown("### Model Performance Comparison")
+                
+                # Create comparison table
+                model_data = []
+                for key, result in all_models.items():
+                    m = result['metrics']
+                    improvement = result.get('improvement', {}).get('MAPE_pct_improvement', 0)
+                    model_data.append({
+                        'Model': result['name'],
+                        'MAPE (%)': f"{m['MAPE']:.2f}",
+                        'MAE': f"{m['MAE']:.1f}",
+                        'RMSE': f"{m['RMSE']:.1f}",
+                        'CI Coverage (%)': f"{m['Within_CI_%']:.1f}",
+                        'vs Baseline': f"+{improvement:.1f}%" if improvement > 0 else f"{improvement:.1f}%"
+                    })
+                
+                comparison_df = pd.DataFrame(model_data)
+                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+                
+                # Best model highlight
+                best_model = min(all_models.items(), key=lambda x: x[1]['metrics']['MAPE'])
+                st.info(f"**Best performing model:** {best_model[1]['name']} with {best_model[1]['metrics']['MAPE']:.2f}% MAPE")
+                
+                # Model descriptions
+                st.markdown("""
+                **Model Descriptions:**
+                - **SARIMAX (Baseline)**: Seasonal ARIMA with trend and seasonality only
+                - **SARIMAX + Axiom Ray**: SARIMAX with Axiom Ray AI as a 2-week leading indicator
+                - **Holt-Winters**: Triple Exponential Smoothing (trend + seasonality)
+                - **Ensemble**: Weighted combination of SARIMAX + Axiom Ray and Holt-Winters
+                """)
                     
         except Exception as e:
             update_status(f"Error during training: {str(e)}", 0)
