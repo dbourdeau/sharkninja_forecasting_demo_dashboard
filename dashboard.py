@@ -405,30 +405,13 @@ def main():
     future_forecast_baseline = forecaster_baseline.forecast_future(periods=forecast_periods)
     metrics_baseline, eval_df_baseline = forecaster_baseline.evaluate(test_df)
     
-    # Triple all volumes for more realistic call center scale and staffing variance
-    volume_multiplier = 3.0
-    for forecast_df in [future_forecast, future_forecast_baseline]:
-        forecast_df['yhat'] = forecast_df['yhat'] * volume_multiplier
-        if 'yhat_lower' in forecast_df.columns:
-            forecast_df['yhat_lower'] = forecast_df['yhat_lower'] * volume_multiplier
-        if 'yhat_upper' in forecast_df.columns:
-            forecast_df['yhat_upper'] = forecast_df['yhat_upper'] * volume_multiplier
-    
     # Generate forecasts for all models (for visualization)
     all_model_forecasts = {}
     for key, result in all_models.items():
         model = result['model']
-        forecast_df = result['forecast'].copy()
-        # Apply volume multiplier to all model forecasts
-        forecast_df['yhat'] = forecast_df['yhat'] * volume_multiplier
-        if 'yhat_lower' in forecast_df.columns:
-            forecast_df['yhat_lower'] = forecast_df['yhat_lower'] * volume_multiplier
-        if 'yhat_upper' in forecast_df.columns:
-            forecast_df['yhat_upper'] = forecast_df['yhat_upper'] * volume_multiplier
-        
         all_model_forecasts[key] = {
             'name': result['name'],
-            'forecast': forecast_df,
+            'forecast': result['forecast'],
             'metrics': result['metrics']
         }
     

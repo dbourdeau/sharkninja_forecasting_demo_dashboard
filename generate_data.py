@@ -93,8 +93,8 @@ def generate_call_volume_data(start_date='2021-01-04', weeks=156):
     dates = pd.date_range(start=start_date, periods=weeks, freq='W-MON')
     factors = generate_underlying_factors(weeks, dates)
     
-    # BASE VOLUME
-    base_level = 450
+    # BASE VOLUME (tripled for realistic call center scale)
+    base_level = 450 * 3  # 1350 base volume
     
     # Combine factors to create volume
     volume = base_level * factors['growth'] * (
@@ -105,18 +105,18 @@ def generate_call_volume_data(start_date='2021-01-04', weeks=156):
         factors['quality_issues']        # Quality issues
     )
     
-    # Add observation noise (things we can't predict)
+    # Add observation noise (things we can't predict) - scaled with volume
     np.random.seed(42)
-    observation_noise = np.random.normal(0, 35, weeks)
+    observation_noise = np.random.normal(0, 35 * 3, weeks)  # Tripled noise
     
-    # Add autocorrelated noise (week-to-week persistence)
+    # Add autocorrelated noise (week-to-week persistence) - scaled with volume
     ar_noise = np.zeros(weeks)
-    ar_noise[0] = np.random.normal(0, 20)
+    ar_noise[0] = np.random.normal(0, 20 * 3)  # Tripled
     for i in range(1, weeks):
-        ar_noise[i] = 0.3 * ar_noise[i-1] + np.random.normal(0, 18)
+        ar_noise[i] = 0.3 * ar_noise[i-1] + np.random.normal(0, 18 * 3)  # Tripled
     
     volume = volume + observation_noise + ar_noise
-    volume = np.maximum(volume, 200)
+    volume = np.maximum(volume, 200 * 3)  # Minimum 600
     volume = np.round(volume).astype(int)
     
     # Product breakdown
