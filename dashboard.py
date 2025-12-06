@@ -19,7 +19,7 @@ from business_metrics import calculate_staffing_needs, calculate_costs, calculat
 st.set_page_config(
     page_title="SharkNinja Support Forecast",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # SharkNinja brand colors
@@ -276,23 +276,16 @@ def main():
     st.markdown('<p class="sub-header">Powered by Axiom Ray AI | Predictive Analytics for Workforce Optimization</p>', unsafe_allow_html=True)
     st.markdown("---")
     
-    # Sidebar with SharkNinja context
-    st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/SharkNinja_logo.svg/200px-SharkNinja_logo.svg.png", width=150)
-    st.sidebar.header("Forecast Configuration")
-    
     # Load data
     df = load_data()
     if df is None:
         st.stop()
     
-    # Sidebar controls
-    test_size = st.sidebar.slider("Test Set Size (%)", 10, 40, 20, 5) / 100
-    forecast_periods = st.sidebar.slider("Forecast Weeks", 4, 26, 13, 1)  # Default: 13 weeks (3 months)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Model Parameters")
-    changepoint_prior = st.sidebar.slider("Changepoint Prior Scale", 0.01, 0.5, 0.05, 0.01)
-    seasonality_prior = st.sidebar.slider("Seasonality Prior Scale", 1.0, 20.0, 10.0, 1.0)
+    # Fixed parameters (removed sidebar for cleaner presentation)
+    test_size = 0.20  # 20% test set
+    forecast_periods = 13  # 13 weeks (3 months)
+    changepoint_prior = 0.05
+    seasonality_prior = 10.0
     
     # Split data
     train_df, test_df = train_test_split(df, test_size=test_size)
@@ -957,13 +950,11 @@ RECOMMENDATIONS:
     with tab4:
         st.header("Business Impact & Staffing Analysis")
         
-        # Sidebar for business parameters
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### Business Parameters")
-        hourly_rate = st.sidebar.slider("Hourly Rate ($)", 15, 50, 25, 1)
-        overhead_rate = st.sidebar.slider("Overhead Multiplier", 1.2, 1.5, 1.35, 0.05)
-        avg_handle_time = st.sidebar.slider("Avg Handle Time (min)", 3.0, 7.0, 4.5, 0.1)
-        service_level = st.sidebar.slider("Service Level Target", 0.70, 0.95, 0.80, 0.01)
+        # Fixed business parameters (realistic industry defaults)
+        hourly_rate = 25  # $25/hour
+        overhead_rate = 1.35  # 35% overhead
+        avg_handle_time = 4.5  # 4.5 minutes
+        service_level = 0.80  # 80% SLA
         
         # Calculate staffing needs
         staffing_df = calculate_staffing_needs(future_forecast, avg_handle_time, service_level)
