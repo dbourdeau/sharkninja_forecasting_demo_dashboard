@@ -334,13 +334,13 @@ def main():
             forecaster_baseline = all_models['sarimax_baseline']['model'] if 'sarimax_baseline' in all_models else forecaster
             
             total_time = time.time() - start_total
-            st.success(f"✓ **All models trained in {total_time:.1f} seconds!**")
+            st.success(f"**All models trained in {total_time:.1f} seconds!**")
             
             update_status("Model training complete! Generating forecasts...", 90)
             progress_bar.progress(100)
             
             # Show model comparison in expandable section
-            with st.expander("📊 Multi-Model Comparison & Diagnostics (click to view)", expanded=False):
+            with st.expander("Multi-Model Comparison & Diagnostics (click to view)", expanded=False):
                 st.markdown("### Model Performance Comparison")
                 
                 # Create comparison table
@@ -1030,7 +1030,7 @@ RECOMMENDATIONS:
         roi_col1, roi_col2, roi_col3 = st.columns(3)
         
         with roi_col1:
-            st.markdown("**📊 Forecast-Based Staffing** *(Recommended)*")
+            st.markdown("**Forecast-Based Staffing** *(Recommended)*")
             st.markdown(f"""
             - Total Cost: **${roi_metrics['total_forecast_cost']:,.0f}**
             - Avg Weekly: **${roi_metrics['avg_weekly_cost_forecast']:,.0f}**
@@ -1040,7 +1040,7 @@ RECOMMENDATIONS:
             """)
         
         with roi_col2:
-            st.markdown("**⚠️ Reactive Staffing** *(Conservative - Always Staff for Peak)*")
+            st.markdown("**Reactive Staffing** *(Conservative - Always Staff for Peak)*")
             st.markdown(f"""
             - Total Cost: **${roi_metrics['total_reactive_cost']:,.0f}**
             - Avg Weekly: **${roi_metrics['avg_weekly_cost_reactive']:,.0f}**
@@ -1050,7 +1050,7 @@ RECOMMENDATIONS:
             """)
         
         with roi_col3:
-            st.markdown("**⚡ Average Staffing** *(Risky - Staff for Average)*")
+            st.markdown("**Average Staffing** *(Risky - Staff for Average)*")
             st.markdown(f"""
             - Total Cost: **${roi_metrics['total_avg_cost']:,.0f}**
             - Avg Weekly: **${roi_metrics['avg_weekly_cost_avg']:,.0f}**
@@ -1062,7 +1062,7 @@ RECOMMENDATIONS:
         # Savings highlight
         if roi_metrics['total_savings'] > 0:
             st.success(f"""
-            **💰 Forecast-Based Staffing Saves ${roi_metrics['total_savings']:,.0f}** 
+            **Forecast-Based Staffing Saves ${roi_metrics['total_savings']:,.0f}** 
             (${roi_metrics['annualized_savings']:,.0f} annualized) 
             vs reactive staffing while maintaining service quality.
             """)
@@ -1074,7 +1074,7 @@ RECOMMENDATIONS:
             if abs(hist_change_pct) > 1:
                 direction = "increase" if hist_change > 0 else "decrease"
                 st.info(f"""
-                **📈 Forecast vs Recent History**: 
+                **Forecast vs Recent History**: 
                 Forecasted costs are {abs(hist_change_pct):.1f}% {direction} 
                 (${abs(hist_change):,.0f}/week) compared to recent historical average.
                 """)
@@ -1266,7 +1266,7 @@ RECOMMENDATIONS:
             - **Low Risk Weeks**: {len(risk_periods[risk_periods['combined_risk'] == 'Low'])}
             """)
         else:
-            st.success("✅ No high-risk periods identified. Forecast indicates manageable volume throughout the period.")
+            st.success("No high-risk periods identified. Forecast indicates manageable volume throughout the period.")
         
         # Uncertainty Warning
         if 'worst_case_cost' in roi_metrics and roi_metrics['max_additional_cost'] > 0:
@@ -1274,7 +1274,7 @@ RECOMMENDATIONS:
             uncertainty_pct = (uncertainty_buffer / roi_metrics['total_forecast_cost'] * 100)
             if uncertainty_pct > 10:
                 st.warning(f"""
-                **⚠️ Forecast Uncertainty**: Worst-case scenario could require 
+                **Forecast Uncertainty**: Worst-case scenario could require 
                 additional ${uncertainty_buffer:,.0f} ({uncertainty_pct:.1f}%) 
                 in costs if upper bound forecasts materialize. Consider adding 
                 contingency buffer for high-uncertainty weeks.
@@ -1675,9 +1675,9 @@ RECOMMENDATIONS:
             # Check TensorFlow availability
             try:
                 import tensorflow as tf
-                tf_status = "✅ Available"
+                tf_status = "Available"
             except ImportError:
-                tf_status = "❌ Not available (LSTM & Neural Network models will be skipped)"
+                tf_status = "Not available (LSTM & Neural Network models will be skipped)"
             st.caption(f"TensorFlow status: {tf_status}")
             
             # Model comparison metrics
@@ -1706,7 +1706,7 @@ RECOMMENDATIONS:
                 model_names = [result['name'] for result in short_term_results.values()]
                 st.caption(f"Models available: {', '.join(model_names)}")
             else:
-                st.warning("⚠️ No models were successfully trained. This may be due to:")
+                st.warning("No models were successfully trained. This may be due to:")
                 st.markdown("""
                 - Insufficient training data
                 - TensorFlow/keras not available (LSTM and Neural Network models)
