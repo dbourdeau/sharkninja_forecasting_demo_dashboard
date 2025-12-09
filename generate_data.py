@@ -320,7 +320,8 @@ def validate_leading_indicator(df, lead_weeks=2):
     return leading_corr, concurrent_corr
 
 
-if __name__ == '__main__':
+def main():
+    """Main function to generate and save data. Can be called from other modules."""
     # Generate data
     df = create_combined_dataset()
     
@@ -338,3 +339,9 @@ if __name__ == '__main__':
     
     print("\nLast few rows:")
     print(df[['ds', 'y', 'axiom_ray_score', 'shark_volume', 'ninja_volume']].tail(10))
+    
+    return df
+
+
+if __name__ == '__main__':
+    main()
