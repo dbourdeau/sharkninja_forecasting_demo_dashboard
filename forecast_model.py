@@ -100,12 +100,16 @@ class SARIMAXForecaster:
         best_aic = np.inf
         best_model = None
         
-        # Seasonal orders to try: quarterly (13 weeks) and annual (52 weeks approx)
+        # Seasonal orders to try: prioritize seasonal models
+        # Weekly data: 13 weeks = quarterly, 52 weeks = annual
         configs = [
-            ((1, 1, 1), (1, 1, 1, 13)),  # Quarterly seasonality
+            ((1, 1, 1), (1, 1, 1, 13)),  # Quarterly seasonality (13 weeks)
             ((1, 1, 1), (1, 0, 1, 13)),  # Quarterly, no seasonal differencing
-            ((2, 1, 2), (1, 0, 1, 13)),  # More complex ARIMA
-            ((1, 1, 1), (0, 0, 0, 0)),   # No seasonality fallback
+            ((1, 1, 1), (1, 1, 1, 52)),  # Annual seasonality (52 weeks)
+            ((1, 1, 1), (1, 0, 1, 52)),  # Annual, no seasonal differencing
+            ((2, 1, 2), (1, 0, 1, 13)),  # More complex with quarterly seasonality
+            ((1, 1, 1), (0, 1, 1, 13)),  # Seasonal MA only
+            ((1, 1, 1), (1, 1, 0, 13)),  # Seasonal AR only
         ]
         
         for order, seasonal_order in configs:
@@ -128,10 +132,19 @@ class SARIMAXForecaster:
                 continue
         
         if best_model is None:
-            # Ultimate fallback - simple model
-            self.model = SARIMAX(endog=endog, exog=exog, order=(1, 1, 1),
-                                enforce_stationarity=False, enforce_invertibility=False)
-            best_model = self.model.fit(disp=False, maxiter=50)
+            # Ultimate fallback - still use seasonal model (quarterly seasonality)
+            try:
+                self.model = SARIMAX(endog=endog, exog=exog, order=(1, 1, 1),
+                                    seasonal_order=(1, 1, 1, 13),
+                                    enforce_stationarity=False, enforce_invertibility=False,
+                                    trend='t')
+                best_model = self.model.fit(disp=False, maxiter=100)
+            except Exception:
+                # Last resort: simple seasonal without trend
+                self.model = SARIMAX(endog=endog, exog=exog, order=(1, 1, 1),
+                                    seasonal_order=(1, 1, 1, 13),
+                                    enforce_stationarity=False, enforce_invertibility=False)
+                best_model = self.model.fit(disp=False, maxiter=50)
         
         self.model_fitted = best_model
         return self
