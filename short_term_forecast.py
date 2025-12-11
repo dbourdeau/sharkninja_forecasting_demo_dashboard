@@ -13,7 +13,14 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from statsmodels.tsa.holtwinters import SimpleExpSmoothing, ExponentialSmoothing
-from statsmodels.tsa.arima.model import ARIMA
+# Handle both old and new statsmodels ARIMA API
+try:
+    from statsmodels.tsa.arima.model import ARIMA
+except ImportError:
+    try:
+        from statsmodels.tsa.arima_model import ARIMA
+    except ImportError:
+        ARIMA = None
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
 import warnings
@@ -216,10 +223,13 @@ class ShortTermForecaster:
             self.models['ses'] = None
         
         # Fit ARIMA (short-term dynamics)
-        try:
-            arima_model = ARIMA(y, order=(2, 0, 1)).fit()
-            self.models['arima'] = arima_model
-        except Exception:
+        if ARIMA is not None:
+            try:
+                arima_model = ARIMA(y, order=(2, 0, 1)).fit()
+                self.models['arima'] = arima_model
+            except Exception:
+                self.models['arima'] = None
+        else:
             self.models['arima'] = None
         
         # Fit Holt-Winters with weekly seasonality

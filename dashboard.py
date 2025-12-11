@@ -21,7 +21,18 @@ from business_metrics import (
     calculate_service_quality_metrics,
     calculate_budget_impact
 )
-from short_term_forecast import generate_daily_data, generate_hourly_data, forecast_hourly, ShortTermForecaster, compare_short_term_models, get_staffing_recommendation
+from short_term_forecast import generate_daily_data, ShortTermForecaster, compare_short_term_models, get_staffing_recommendation
+# Try to import hourly functions (may not be available in older versions)
+try:
+    from short_term_forecast import generate_hourly_data, forecast_hourly
+    HOURLY_FORECAST_AVAILABLE = True
+except ImportError:
+    HOURLY_FORECAST_AVAILABLE = False
+    # Define stub functions if not available
+    def generate_hourly_data(*args, **kwargs):
+        raise NotImplementedError("Hourly forecasting not available")
+    def forecast_hourly(*args, **kwargs):
+        raise NotImplementedError("Hourly forecasting not available")
 
 # Page configuration
 st.set_page_config(
@@ -1877,10 +1888,11 @@ RECOMMENDATIONS:
             st.markdown("---")
             
             # Intraday (Hourly) Forecasting Section
-            st.subheader("Intraday (Hourly) Volume & Forecast")
-            st.markdown("**Hourly breakdown for next 5 days to support intraday staffing decisions**")
-            
-            try:
+            if HOURLY_FORECAST_AVAILABLE:
+                st.subheader("Intraday (Hourly) Volume & Forecast")
+                st.markdown("**Hourly breakdown for next 5 days to support intraday staffing decisions**")
+                
+                try:
                 # Generate hourly data from daily
                 with st.spinner("Generating hourly data from daily data..."):
                     hours_back = min(7*24, len(daily_df) * 24)  # Last 7 days of hourly data
@@ -1996,9 +2008,11 @@ RECOMMENDATIONS:
                     peak_df = pd.DataFrame(peak_hours)
                     st.dataframe(peak_df, use_container_width=True, hide_index=True)
             
-            except Exception as e:
-                st.warning(f"Could not generate intraday forecast: {str(e)}")
-                st.info("Daily forecast is still available above. Intraday forecast requires sufficient hourly historical data.")
+                except Exception as e:
+                    st.warning(f"Could not generate intraday forecast: {str(e)}")
+                    st.info("Daily forecast is still available above. Intraday forecast requires sufficient hourly historical data.")
+            else:
+                st.info("Hourly forecasting features are not available in this version.")
             
             st.markdown("---")
             
