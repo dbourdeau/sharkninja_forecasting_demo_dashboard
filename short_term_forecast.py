@@ -95,6 +95,87 @@ def generate_daily_data(weekly_df, days_back=90):
     return daily_df
 
 
+def generate_hourly_data(daily_df, hours_back=7*24):
+    """
+    Convert daily data to hourly data with realistic intraday patterns.
+    
+    Intraday patterns (typical call center):
+    - 8am-10am: Morning ramp-up
+    - 10am-12pm: Peak morning hours
+    - 12pm-2pm: Lunch dip
+    - 2pm-5pm: Peak afternoon hours
+    - 5pm-8pm: Evening decline
+    - 8pm-8am: Low overnight volume
+    """
+    np.random.seed(123)
+    
+    # Get the last date from daily data
+    last_daily_date = pd.to_datetime(daily_df['ds'].max())
+    
+    # Generate hourly dates for the past N hours
+    end_date = last_daily_date.replace(hour=23, minute=0, second=0, microsecond=0)
+    start_date = end_date - timedelta(hours=hours_back)
+    hourly_dates = pd.date_range(start=start_date, end=end_date, freq='H')
+    
+    # Intraday hour multipliers (0=midnight, 23=11pm)
+    # Typical call center pattern: 8am-6pm business hours are busiest
+    hour_multipliers = np.array([
+        0.05, 0.03, 0.02, 0.02, 0.03, 0.05, 0.08, 0.15,  # 12am-7am: Very low
+        0.35, 0.60, 0.85, 0.95,  # 8am-11am: Morning ramp-up to peak
+        0.90, 0.70, 0.75, 0.85,  # 12pm-3pm: Lunch dip then recovery
+        0.95, 0.90, 0.75, 0.50,  # 4pm-7pm: Afternoon peak then decline
+        0.30, 0.20, 0.15, 0.10   # 8pm-11pm: Evening low
+    ])
+    
+    # Get average daily volume from recent days
+    recent_daily_avg = daily_df['y'].tail(7).mean()
+    hourly_base = recent_daily_avg / 24  # Approximate hourly from daily
+    
+    # Generate hourly volumes
+    hourly_volumes = []
+    daily_lookup = daily_df.set_index('ds')['y'].to_dict()
+    
+    for date in hourly_dates:
+        # Get the day's total volume
+        day_date = date.date()
+        day_key = pd.Timestamp(day_date)
+        
+        # Find closest daily value
+        day_volume = recent_daily_avg  # default
+        for daily_date in daily_df['ds']:
+            if pd.Timestamp(daily_date).date() == day_date:
+                day_volume = daily_df[daily_df['ds'] == daily_date]['y'].iloc[0]
+                break
+        
+        # Apply hour multiplier
+        hour = date.hour
+        hour_mult = hour_multipliers[hour]
+        
+        # Calculate hourly volume (distribute daily volume according to hour pattern)
+        # Normalize hour multipliers so they sum to 24
+        total_multiplier = hour_multipliers.sum()
+        hourly_volume = (day_volume / total_multiplier) * hour_mult
+        
+        # Add noise (10-15% variance)
+        noise = np.random.normal(0, hourly_volume * 0.12)
+        volume = hourly_volume + noise
+        volume = max(volume, 1)  # Minimum floor
+        
+        hourly_volumes.append(int(round(volume)))
+    
+    # Create hourly dataframe
+    hourly_df = pd.DataFrame({
+        'ds': hourly_dates,
+        'y': hourly_volumes,
+        'hour': [d.hour for d in hourly_dates],
+        'day_of_week': [d.dayofweek for d in hourly_dates],
+        'day_name': [d.strftime('%A') for d in hourly_dates],
+        'date': [d.date() for d in hourly_dates]
+    })
+    
+    return hourly_df
+
+
 class ShortTermForecaster:
     """
     Short-term forecaster for 1-5 day ahead predictions.
@@ -553,6 +634,73 @@ def compare_short_term_models(daily_df, test_days=5):
             print(f"Method {method} failed: {e}")
     
     return results, train_df, test_df
+
+
+def forecast_hourly(hourly_df, hours=24*5):
+    """
+    Forecast hourly volumes for next N hours using historical hour-of-day and day-of-week patterns.
+    
+    Args:
+        hourly_df: DataFrame with hourly historical data (columns: ds, y, hour, day_of_week)
+        hours: Number of hours to forecast (default: 5 days = 120 hours)
+    
+    Returns:
+        DataFrame with hourly forecast (columns: ds, yhat, yhat_lower, yhat_upper, hour, day_of_week, day_name)
+    """
+    if len(hourly_df) < 24:
+        raise ValueError("Need at least 24 hours of historical data")
+    
+    # Get last date
+    last_date = pd.to_datetime(hourly_df['ds'].max())
+    
+    # Generate future hourly dates
+    future_dates = pd.date_range(start=last_date + timedelta(hours=1), periods=hours, freq='H')
+    
+    # Calculate hour-of-day patterns (average by hour across all days)
+    if 'hour' not in hourly_df.columns:
+        hourly_df['hour'] = pd.to_datetime(hourly_df['ds']).dt.hour
+    hour_patterns = hourly_df.groupby('hour')['y'].mean().to_dict()
+    
+    # Calculate day-of-week patterns
+    if 'day_of_week' not in hourly_df.columns:
+        hourly_df['day_of_week'] = pd.to_datetime(hourly_df['ds']).dt.dayofweek
+    dow_patterns = hourly_df.groupby('day_of_week')['y'].mean().to_dict()
+    
+    # Calculate overall average
+    overall_avg = hourly_df['y'].mean()
+    
+    # Calculate hour-of-day multipliers (normalized)
+    hour_mults = {h: hour_patterns.get(h, overall_avg) / overall_avg for h in range(24)}
+    
+    # Calculate day-of-week multipliers (normalized)
+    dow_mults = {d: dow_patterns.get(d, overall_avg) / overall_avg for d in range(7)}
+    
+    # Generate forecasts
+    forecasts = []
+    std_residual = hourly_df['y'].std() * 0.15  # 15% std for CI
+    
+    for date in future_dates:
+        hour = date.hour
+        dow = date.dayofweek
+        
+        # Base forecast: combine hour pattern and day-of-week pattern
+        base_forecast = overall_avg * hour_mults[hour] * dow_mults[dow]
+        
+        # Confidence intervals
+        yhat_lower = max(1, base_forecast - 1.96 * std_residual)
+        yhat_upper = base_forecast + 1.96 * std_residual
+        
+        forecasts.append({
+            'ds': date,
+            'yhat': max(1, base_forecast),
+            'yhat_lower': yhat_lower,
+            'yhat_upper': yhat_upper,
+            'hour': hour,
+            'day_of_week': dow,
+            'day_name': date.strftime('%A')
+        })
+    
+    return pd.DataFrame(forecasts)
 
 
 def get_staffing_recommendation(forecast_df, calls_per_agent_hour=8, hours_per_shift=8):

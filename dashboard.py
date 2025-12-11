@@ -21,7 +21,7 @@ from business_metrics import (
     calculate_service_quality_metrics,
     calculate_budget_impact
 )
-from short_term_forecast import generate_daily_data, ShortTermForecaster, compare_short_term_models, get_staffing_recommendation
+from short_term_forecast import generate_daily_data, generate_hourly_data, forecast_hourly, ShortTermForecaster, compare_short_term_models, get_staffing_recommendation
 
 # Page configuration
 st.set_page_config(
@@ -1874,15 +1874,140 @@ RECOMMENDATIONS:
             )
             st.plotly_chart(fig3, use_container_width=True)
             
+            st.markdown("---")
+            
+            # Intraday (Hourly) Forecasting Section
+            st.subheader("Intraday (Hourly) Volume & Forecast")
+            st.markdown("**Hourly breakdown for next 5 days to support intraday staffing decisions**")
+            
+            try:
+                # Generate hourly data from daily
+                with st.spinner("Generating hourly data from daily data..."):
+                    hours_back = min(7*24, len(daily_df) * 24)  # Last 7 days of hourly data
+                    hourly_df = generate_hourly_data(daily_df, hours_back=hours_back)
+                
+                if hourly_df is None or len(hourly_df) == 0:
+                    st.warning("Could not generate hourly data. Showing daily forecast only.")
+                else:
+                    # Generate hourly forecast for next 5 days (120 hours)
+                    with st.spinner("Generating hourly forecast..."):
+                        hourly_forecast = forecast_hourly(hourly_df, hours=24*5)
+                    
+                    # Intraday Pattern (Average by Hour of Day)
+                    st.markdown("**Historical Intraday Pattern (Average Hourly Volume)**")
+                    
+                    hour_avg = hourly_df.groupby('hour')['y'].mean()
+                    
+                    fig_hour = go.Figure()
+                    fig_hour.add_trace(go.Bar(
+                        x=hour_avg.index,
+                        y=hour_avg.values,
+                        marker_color=['#2ca02c' if 8 <= h <= 17 else '#ff7f0e' for h in hour_avg.index],
+                        text=[f'{int(v)}' for v in hour_avg.values],
+                        textposition='outside'
+                    ))
+                    fig_hour.update_layout(
+                        title="Average Hourly Volume Pattern",
+                        xaxis_title="Hour of Day",
+                        yaxis_title="Avg Call Volume",
+                        height=350,
+                        xaxis=dict(tickmode='linear', tick0=0, dtick=2)
+                    )
+                    st.plotly_chart(fig_hour, use_container_width=True)
+                    
+                    # Hourly Forecast Chart
+                    st.markdown("**Hourly Forecast - Next 5 Days**")
+                    
+                    # Group by day for better visualization
+                    hourly_forecast['date'] = pd.to_datetime(hourly_forecast['ds']).dt.date
+                    
+                    fig_hourly_forecast = go.Figure()
+                    
+                    # Show last 48 hours of historical for context
+                    recent_hourly = hourly_df.tail(48)
+                    fig_hourly_forecast.add_trace(go.Scatter(
+                        x=recent_hourly['ds'], y=recent_hourly['y'],
+                        name='Historical (Last 48h)', line=dict(color='#1f77b4', width=1.5),
+                        mode='lines'
+                    ))
+                    
+                    # Forecast
+                    fig_hourly_forecast.add_trace(go.Scatter(
+                        x=hourly_forecast['ds'], y=hourly_forecast['yhat'],
+                        name='Hourly Forecast', line=dict(color='#2ca02c', width=2),
+                        mode='lines'
+                    ))
+                    
+                    # Confidence interval
+                    fig_hourly_forecast.add_trace(go.Scatter(
+                        x=hourly_forecast['ds'], y=hourly_forecast['yhat_upper'],
+                        name='Upper Bound', line=dict(width=0), mode='lines', showlegend=False
+                    ))
+                    fig_hourly_forecast.add_trace(go.Scatter(
+                        x=hourly_forecast['ds'], y=hourly_forecast['yhat_lower'],
+                        name='95% CI', line=dict(width=0), mode='lines',
+                        fill='tonexty', fillcolor='rgba(44, 160, 44, 0.2)'
+                    ))
+                    
+                    fig_hourly_forecast.update_layout(
+                        title="Hourly Call Volume Forecast - Next 5 Days",
+                        xaxis_title="Date & Time",
+                        yaxis_title="Call Volume (per hour)",
+                        height=500,
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig_hourly_forecast, use_container_width=True)
+                    
+                    # Hourly summary by day
+                    st.markdown("**Daily Summary from Hourly Forecast**")
+                    daily_hourly_summary = hourly_forecast.groupby('date').agg({
+                        'yhat': 'sum',
+                        'yhat_lower': 'sum',
+                        'yhat_upper': 'sum',
+                        'day_name': 'first'
+                    }).reset_index()
+                    
+                    daily_hourly_summary.columns = ['Date', 'Daily Total', 'Lower Bound', 'Upper Bound', 'Day']
+                    daily_hourly_summary['Daily Total'] = daily_hourly_summary['Daily Total'].astype(int)
+                    daily_hourly_summary['Lower Bound'] = daily_hourly_summary['Lower Bound'].astype(int)
+                    daily_hourly_summary['Upper Bound'] = daily_hourly_summary['Upper Bound'].astype(int)
+                    daily_hourly_summary['Range'] = daily_hourly_summary['Lower Bound'].astype(str) + ' - ' + daily_hourly_summary['Upper Bound'].astype(str)
+                    
+                    display_cols = ['Date', 'Day', 'Daily Total', 'Range']
+                    st.dataframe(daily_hourly_summary[display_cols], use_container_width=True, hide_index=True)
+                    
+                    # Peak hours analysis
+                    st.markdown("**Peak Hours by Day**")
+                    hourly_forecast['date_str'] = hourly_forecast['ds'].dt.strftime('%Y-%m-%d')
+                    
+                    peak_hours = []
+                    for date in hourly_forecast['date'].unique():
+                        day_data = hourly_forecast[hourly_forecast['date'] == date]
+                        peak_idx = day_data['yhat'].idxmax()
+                        peak_row = day_data.loc[peak_idx]
+                        peak_hours.append({
+                            'Date': date,
+                            'Day': peak_row['day_name'],
+                            'Peak Hour': f"{int(peak_row['hour']):02d}:00",
+                            'Peak Volume': int(peak_row['yhat']),
+                            'Peak Period': f"{int(peak_row['hour']):02d}:00-{int(peak_row['hour'])+1:02d}:00"
+                        })
+                    
+                    peak_df = pd.DataFrame(peak_hours)
+                    st.dataframe(peak_df, use_container_width=True, hide_index=True)
+            
+            except Exception as e:
+                st.warning(f"Could not generate intraday forecast: {str(e)}")
+                st.info("Daily forecast is still available above. Intraday forecast requires sufficient hourly historical data.")
+            
+            st.markdown("---")
+            
             # Info box
             st.info("""
             **Short-Term Forecasting Methods (5-Day Horizon):**
-            - **Simple Exp. Smoothing**: Good for stable patterns
-            - **ARIMA(2,0,1)**: Captures short-term dynamics
-            - **Day-of-Week Average**: Uses historical day patterns
-            - **LSTM (Deep Learning)**: Recurrent neural network for sequential patterns
-            - **Neural Network (MLP)**: Feedforward network with lagged features and day-of-week encoding
-            - **Ensemble**: Combines all methods for robustness
+            - **Daily Forecast**: Simple Exp. Smoothing, ARIMA(2,0,1), Day-of-Week Average, LSTM, Neural Network, Ensemble
+            - **Intraday (Hourly) Forecast**: Uses hour-of-day and day-of-week patterns for hourly volume predictions
+            - **Use Cases**: Daily forecasts for weekly staffing planning; Hourly forecasts for intraday shift scheduling
             """)
             
         except Exception as e:
