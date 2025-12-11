@@ -326,12 +326,9 @@ def main():
             
             update_status("Comparing model performance...", 80)
             
-            # Also get backward-compatible comparison
-            comparison = compare_forecasts(train_df, test_df, forecast_periods)
-            
             # Use ensemble as the primary forecaster
-            forecaster = all_models['ensemble']['model'] if 'ensemble' in all_models else all_models['sarimax_baseline']['model']
-            forecaster_baseline = all_models['sarimax_baseline']['model'] if 'sarimax_baseline' in all_models else forecaster
+            forecaster = all_models['ensemble']['model'] if 'ensemble' in all_models else all_models['sarimax_axiom']['model']
+            forecaster_baseline = all_models['sarimax_axiom']['model'] if 'sarimax_axiom' in all_models else forecaster
             
             total_time = time.time() - start_total
             st.success(f"**All models trained in {total_time:.1f} seconds!**")
@@ -668,7 +665,9 @@ RECOMMENDATIONS:
         st.subheader("Forecast Values by Model")
         
         # Build comparison dataframe
-        comparison_data = {'Date': all_model_forecasts['sarimax_baseline']['forecast']['ds'].dt.strftime('%Y-%m-%d')}
+        # Use first available model for date column
+        first_model_key = list(all_model_forecasts.keys())[0]
+        comparison_data = {'Date': all_model_forecasts[first_model_key]['forecast']['ds'].dt.strftime('%Y-%m-%d')}
         for key, data in all_model_forecasts.items():
             comparison_data[data['name']] = data['forecast']['yhat'].round(0).astype(int)
         

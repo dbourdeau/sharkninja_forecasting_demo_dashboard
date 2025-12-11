@@ -100,36 +100,37 @@ class SARIMAXForecaster:
         best_aic = np.inf
         best_model = None
         
-        # Seasonal orders to try: prioritize seasonal models
-        # Weekly data: 13 weeks = quarterly, 52 weeks = annual
-        configs = [
-            ((1, 1, 1), (1, 1, 1, 13)),  # Quarterly seasonality (13 weeks)
-            ((1, 1, 1), (1, 0, 1, 13)),  # Quarterly, no seasonal differencing
-            ((1, 1, 1), (1, 1, 1, 52)),  # Annual seasonality (52 weeks)
-            ((1, 1, 1), (1, 0, 1, 52)),  # Annual, no seasonal differencing
-            ((2, 1, 2), (1, 0, 1, 13)),  # More complex with quarterly seasonality
-            ((1, 1, 1), (0, 1, 1, 13)),  # Seasonal MA only
-            ((1, 1, 1), (1, 1, 0, 13)),  # Seasonal AR only
-        ]
-        
-        for order, seasonal_order in configs:
+        # Simplified: Use single best seasonal configuration for speed
+        # Quarterly seasonality (13 weeks) works well for weekly data
+        try:
+            self.model = SARIMAX(
+                endog=endog,
+                exog=exog,
+                order=(1, 1, 1),
+                seasonal_order=(1, 1, 1, 13),  # Quarterly seasonality
+                enforce_stationarity=False,
+                enforce_invertibility=False,
+                trend='t'  # Include trend in the model
+            )
+            best_model = self.model.fit(disp=False, maxiter=100)  # Reduced iterations for speed
+            best_aic = best_model.aic
+        except Exception:
+            # Fallback: simpler seasonal model
             try:
-                model = SARIMAX(
+                self.model = SARIMAX(
                     endog=endog,
                     exog=exog,
-                    order=order,
-                    seasonal_order=seasonal_order,
+                    order=(1, 1, 1),
+                    seasonal_order=(1, 0, 1, 13),  # Quarterly, no seasonal differencing
                     enforce_stationarity=False,
                     enforce_invertibility=False,
-                    trend='t'  # Include trend in the model
+                    trend='t'
                 )
-                fitted = model.fit(disp=False, maxiter=200)
-                if fitted.aic < best_aic:
-                    best_aic = fitted.aic
-                    best_model = fitted
-                    self.model = model
+                best_model = self.model.fit(disp=False, maxiter=100)
+                best_aic = best_model.aic
             except Exception:
-                continue
+                best_model = None
+                best_aic = np.inf
         
         if best_model is None:
             # Ultimate fallback - still use seasonal model (quarterly seasonality)
@@ -687,34 +688,12 @@ class EnsembleForecaster:
         #     except Exception:
         #         self.nn = None
         
-        # Cross-validation to determine weights
-        n = len(df)
-        val_size = max(4, int(n * 0.15))
-        train_cv = df.iloc[:-val_size].copy()
-        val_cv = df.iloc[-val_size:].copy()
-        
-        sarimax_mape = 50
-        hw_mape = 50
+        # Simplified weights: Use equal weights for speed (skip cross-validation)
+        # Cross-validation retrains models which is slow, so use balanced approach
+        sarimax_mape = 10  # Assume similar performance
+        hw_mape = 10
         lstm_mape = 50
         nn_mape = 50
-        
-        try:
-            sarimax_cv = SARIMAXForecaster(use_exogenous=True)
-            sarimax_cv.fit(train_cv)
-            sarimax_pred = sarimax_cv.forecast(val_size, future_exog=val_cv)
-            actual = np.array(val_cv['y'])
-            sarimax_mape = np.mean(np.abs((actual - np.array(sarimax_pred['yhat'])) / np.maximum(actual, 1))) * 100
-        except Exception:
-            pass
-        
-        try:
-            hw_cv = HoltWintersForecaster()
-            hw_cv.fit(train_cv)
-            hw_pred = hw_cv.forecast(val_size)
-            actual = np.array(val_cv['y'])
-            hw_mape = np.mean(np.abs((actual - np.array(hw_pred['yhat'])) / np.maximum(actual, 1))) * 100
-        except Exception:
-            pass
         
         if TENSORFLOW_AVAILABLE:
             try:
@@ -946,8 +925,8 @@ def compare_all_models(df_train, df_test, forecast_periods):
     
     results = {}
     
+    # Reduced to essential models for faster training
     model_configs = [
-        ('sarimax_baseline', 'SARIMAX (Baseline)', {'model_type': 'sarimax_baseline'}),
         ('sarimax_axiom', 'SARIMAX + Axiom Ray', {'model_type': 'sarimax', 'use_exogenous': True}),
         ('holtwinters', 'Holt-Winters', {'model_type': 'holtwinters'}),
         ('ensemble', 'Ensemble', {'model_type': 'ensemble'}),
@@ -978,11 +957,11 @@ def compare_all_models(df_train, df_test, forecast_periods):
         except Exception as e:
             print(f"Model {name} failed: {e}")
     
-    # Calculate improvements relative to baseline
-    if 'sarimax_baseline' in results:
-        baseline_mape = results['sarimax_baseline']['metrics']['MAPE']
+    # Calculate improvements relative to SARIMAX + Axiom Ray (baseline)
+    if 'sarimax_axiom' in results:
+        baseline_mape = results['sarimax_axiom']['metrics']['MAPE']
         for key in results:
-            if key != 'sarimax_baseline':
+            if key != 'sarimax_axiom':
                 model_mape = results[key]['metrics']['MAPE']
                 improvement = baseline_mape - model_mape
                 results[key]['improvement'] = {
@@ -1000,7 +979,7 @@ def compare_forecasts(df_train, df_test, forecast_periods):
     
     results = {}
     
-    model_baseline = CallVolumeForecaster(model_type='sarimax_baseline')
+    model_baseline = CallVolumeForecaster(model_type='sarimax', use_exogenous=True)
     model_baseline.fit(df_train)
     metrics_baseline, eval_baseline = model_baseline.evaluate(df_test)
     forecast_baseline = model_baseline.forecast_future(periods=forecast_periods)
@@ -1010,7 +989,7 @@ def compare_forecasts(df_train, df_test, forecast_periods):
         'metrics': metrics_baseline,
         'eval_df': eval_baseline,
         'forecast': forecast_baseline,
-        'name': 'SARIMAX Baseline'
+        'name': 'SARIMAX + Axiom Ray'
     }
     
     if 'axiom_ray_score' in df_train.columns:
